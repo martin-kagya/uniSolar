@@ -64,7 +64,9 @@ class SimulationRequest(BaseModel):
     capacity_kw: float = 5.0
     tilt: float = 10.0
     azimuth: float = 180.0
+    azimuth: float = 180.0
     module_name: str = None
+    inverter_name: str = None
     year: int = 2023
     panels: list[Panel] = []
     features: list[RoofFeature] = []
@@ -151,6 +153,7 @@ def run_simulation(req: SimulationRequest):
             req.tilt, 
             req.azimuth,
             module_name=req.module_name,
+            inverter_name=req.inverter_name,
             shading_penalty=shading_penalty
         )
         
@@ -293,6 +296,11 @@ def get_modules():
         {"id": "canadian_440", "name": "Canadian 440W", "power_wp": 440, "width_m": 1.134, "length_m": 1.762},
         {"id": "trina_700", "name": "Trina 700W", "power_wp": 700, "width_m": 1.303, "length_m": 2.384}
     ]
+
+
+@app.get("/inverters")
+def get_inverters():
+    return physics_layer.get_representative_inverters()
 
 
 @app.post("/size-system")
