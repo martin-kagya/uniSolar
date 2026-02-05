@@ -249,20 +249,40 @@ def export_csv(data: dict):
     writer = csv.writer(output)
     
     # Header
-    writer.writerow(["UniSolar Professional Export"])
+    writer.writerow(["UniSolar Professional Yield Report"])
     writer.writerow(["Generated At", datetime.now().isoformat()])
+    writer.writerow(["Location", f"{data.get('config', {}).get('latitude')}, {data.get('config', {}).get('longitude')}"])
+    writer.writerow(["System Capacity", f"{data.get('config', {}).get('capacity_kw')} kWp"])
+    writer.writerow(["Total Annual Energy", f"{round(data.get('results', {}).get('annual_energy_kwh', 0), 2)} kWh"])
     writer.writerow([])
-    writer.writerow(["Hour", "Power Output (W)"])
+    writer.writerow(["Date", "Time", "Power Output (kW)"])
     
-    hourly = data.get('hourly_curve', [])
-    for i, val in enumerate(hourly):
-        writer.writerow([f"{i}:00", round(val, 2)])
+    # Extract full hourly data
+    results = data.get('results', {})
+    ac_list = results.get('ac_list', []) # Values in Watts
+    timestamps = results.get('timestamps', []) # Strings 'YYYY-MM-DD HH:MM'
+    
+    if not ac_list or not timestamps:
+        # Fallback to hourly curve if full data missing (should not happen in proper sim)
+        hourly = data.get('hourly_curve', [])
+        for i, val in enumerate(hourly):
+             writer.writerow([f"Typical Day", f"{i}:00", round(val / 1000.0, 4)])
+    else:
+        # Write 8760 rows
+        for ts, power_w in zip(timestamps, ac_list):
+            try:
+                date_part, time_part = ts.split(' ')
+            except:
+                date_part, time_part = ts, ""
+                
+            power_kw = power_w / 1000.0
+            writer.writerow([date_part, time_part, round(power_kw, 4)])
         
     output.seek(0)
     return StreamingResponse(
         iter([output.getvalue()]),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=solar_yield_analysis.csv"}
+        headers={"Content-Disposition": "attachment; filename=UniSolar_Professional_Export.csv"}
     )
 
 
