@@ -250,7 +250,7 @@ def export_csv(data: dict):
     
     # Header
     writer.writerow(["UniSolar Professional Export"])
-    writer.writerow(["Generated At", datetime.datetime.now().isoformat()])
+    writer.writerow(["Generated At", datetime.now().isoformat()])
     writer.writerow([])
     writer.writerow(["Hour", "Power Output (W)"])
     
