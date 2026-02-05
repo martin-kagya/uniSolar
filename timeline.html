@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Timeline - Gantt Chart</title>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({
+            startOnLoad: true,
+            theme: 'base',
+            themeVariables: {
+                fontFamily: 'arial',
+                fontSize: '20px'
+            },
+            gantt: {
+                fontSize: 22,
+                barHeight: 50,
+                barGap: 10,
+                topPadding: 100,
+                sidePadding: 100,
+                sectionFontSize: 26,
+                numberSectionStyles: 3,
+                axisFormat: '%b %d'
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 40px;
+            display: flex;
+            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .mermaid {
+            width: 100%;
+            /* Removed max-width constraint to allow full expansion */
+            overflow-x: auto;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 32px;
+        }
+
+        .print-btn {
+            margin-bottom: 40px;
+            padding: 15px 30px;
+            cursor: pointer;
+            background: #333;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 18px;
+        }
+
+        @media print {
+            .print-btn {
+                display: none;
+            }
+
+            body {
+                padding: 0;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Solar Prediction System Timeline (Jan 10 - May 15)</h1>
+    <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+    <div class="mermaid">
+        gantt
+        dateFormat YYYY-MM-DD
+        title Solar Prediction System Development Master Plan
+        axisFormat %b %d
+
+
+        section Phase 1: Foundation & Data
+        Data Acquisition (Ground Truth) :done, p1_data, 2026-01-10, 2026-01-20
+        DB Schema & Infrastructure :active, p1_infra, 2026-01-15, 2026-01-25
+        Frontend Repo & UI Skeleton : p1_ui, 2026-01-20, 2026-01-30
+
+        section Phase 2: ML Core (Layers 1 & 2)
+        Weather Correction Model (L1) : ml_l1, 2026-02-01, 2026-02-20
+        Soiling & Env Loss Model (L2) : ml_l2, 2026-02-15, 2026-03-01
+        ML Validation & Tuning : ml_val, 2026-02-25, 2026-03-05
+
+        section Phase 3: Backend & Physics (Layer 3)
+        PVLib Integration (Layer 3) : be_phys, 2026-03-01, 2026-03-15
+        API Development (Auth, Sim Endpoints) : be_api, 2026-03-10, 2026-03-25
+        Async Job Queue (Celery/Redis) : be_job, 2026-03-20, 2026-03-30
+
+        section Phase 4: Frontend Visualization
+        Interactive Map Module (Leaflet) : fe_map, 2026-03-25, 2026-04-05
+        Data Viz & Charts (Recharts) : fe_chart, 2026-04-01, 2026-04-10
+        Report Generation Interface : fe_rep, 2026-04-05, 2026-04-15
+
+        section Phase 5: Integration & Polish
+        Full Stack Integration Testing : integ, 2026-04-15, 2026-04-25
+        Performance Optimization : perf, 2026-04-25, 2026-05-01
+        Final Polish & Documentation : final, 2026-05-01, 2026-05-15
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,86 @@
+======================================================================
+LAKE VOLTA MODEL EVALUATION REPORT
+Generated: 2026-01-19 13:48:11
+======================================================================
+
+
+======================================================================
+HOURLY RESOLUTION METRICS
+======================================================================
+Samples:           4,484
+Total Simulated:   43,586.20 kWh
+Total Validation:  16,579.83 kWh
+Scaling Factor:    0.380 (model predicts 2.63x too high)
+
+Absolute Metrics:
+  RMSE:            9.39 kWh/hourly
+  MAE:             6.84 kWh/hourly
+  MBE:             6.02 kWh/hourly (bias)
+
+Percentage Metrics:
+  MAPE:            407.68%
+  nRMSE:           253.88%
+  nMAE:            185.04%
+  nMBE:            162.89%
+
+Goodness of Fit:
+  R²:              -4.4011
+  Correlation:     0.1829
+
+======================================================================
+DAILY RESOLUTION METRICS
+======================================================================
+Samples:           365
+Total Simulated:   43,586.20 kWh
+Total Validation:  16,579.83 kWh
+Scaling Factor:    0.380 (model predicts 2.63x too high)
+
+Absolute Metrics:
+  RMSE:            80.55 kWh/daily
+  MAE:             74.14 kWh/daily
+  MBE:             73.99 kWh/daily (bias)
+
+Percentage Metrics:
+  MAPE:            174.92%
+  nRMSE:           177.32%
+  nMAE:            163.21%
+  nMBE:            162.89%
+
+Goodness of Fit:
+  R²:              -129.6078
+  Correlation:     -0.1751
+
+======================================================================
+MONTHLY RESOLUTION METRICS
+======================================================================
+Samples:           12
+Total Simulated:   43,586.20 kWh
+Total Validation:  16,579.83 kWh
+Scaling Factor:    0.380 (model predicts 2.63x too high)
+
+Absolute Metrics:
+  RMSE:            2,375.34 kWh/monthly
+  MAE:             2,250.53 kWh/monthly
+  MBE:             2,250.53 kWh/monthly (bias)
+
+Percentage Metrics:
+  MAPE:            166.15%
+  nRMSE:           171.92%
+  nMAE:            162.89%
+  nMBE:            162.89%
+
+Goodness of Fit:
+  R²:              -559.4147
+  Correlation:     -0.4577
+
+======================================================================
+INTERPRETATION
+======================================================================
+Overall Rating: Very Poor (1/5)
+
+ISSUE: Model OVER-predicts generation by 163%
+Possible causes:
+  - Unmodeled losses (curtailment, inverter clipping, outages)
+  - Higher soiling/degradation than modeled
+  - System derate factors not captured
+  - Panel efficiency degradation

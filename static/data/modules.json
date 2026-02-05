@@ -1,0 +1,42 @@
+[
+    {
+        "id": "generic_400",
+        "name": "Generic 400W (Portrait)",
+        "manufacturer": "UniSolar",
+        "power_wp": 400,
+        "width_m": 1.0,
+        "length_m": 1.7,
+        "efficiency": 0.20,
+        "type": "Monocrystalline"
+    },
+    {
+        "id": "jinko_tiger_neo_54",
+        "name": "Jinko Tiger Neo 54HL4-V (420W)",
+        "manufacturer": "Jinko Solar",
+        "power_wp": 420,
+        "width_m": 1.134,
+        "length_m": 1.722,
+        "efficiency": 0.215,
+        "type": "N-Type"
+    },
+    {
+        "id": "canadian_hihero_440",
+        "name": "Canadian Solar HiHero (440W)",
+        "manufacturer": "Canadian Solar",
+        "power_wp": 440,
+        "width_m": 1.135,
+        "length_m": 1.815,
+        "efficiency": 0.225,
+        "type": "HJT"
+    },
+    {
+        "id": "trina_vertex_n_700",
+        "name": "Trina Vertex N (700W) - Utility",
+        "manufacturer": "Trina Solar",
+        "power_wp": 700,
+        "width_m": 1.303,
+        "length_m": 2.384,
+        "efficiency": 0.225,
+        "type": "N-Type Bifacial"
+    }
+]
