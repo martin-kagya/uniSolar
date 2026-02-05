@@ -325,32 +325,13 @@ class MapEngine {
      * @param {google.maps.Polygon} polygon - The roof area
      * @param {number} spacing - Gap between panels (meters)
      */
-    fillPolygon(polygon, spacing = 0.6) {
+    fillPolygon(polygon, spacing = 0.1) {
         if (!polygon) return;
 
         const path = polygon.getPath();
         const coords = [];
         path.forEach(p => coords.push({ lat: p.lat(), lng: p.lng() }));
 
-        // 1. Determine Longest Edge for Alignment
-        let maxDistSq = 0;
-        let p1 = coords[0], p2 = coords[1];
-        for (let i = 0; i < coords.length; i++) {
-            let a = coords[i];
-            let b = coords[(i + 1) % coords.length];
-            let dSq = Math.pow(a.lat - b.lat, 2) + Math.pow(a.lng - b.lng, 2);
-            if (dSq > maxDistSq) {
-                maxDistSq = dSq;
-                p1 = a; p2 = b;
-            }
-        }
-
-        // Calculate Angle of the longest edge (relative to North)
-        // Standard Math angle (atan2(dy, dx))
-        const angleRad = Math.atan2(p2.lng - p1.lng, p2.lat - p1.lat);
-        const angleDeg = (angleRad * 180 / Math.PI + 360) % 360;
-
-        // 2. Transformed Grid Fill
         const bounds = new google.maps.LatLngBounds();
         coords.forEach(c => bounds.extend(c));
         const center = bounds.getCenter();
@@ -359,6 +340,8 @@ class MapEngine {
         const orientation = document.getElementById('orientation')?.value || 'portrait';
         const moduleId = document.getElementById('moduleSelect')?.value;
         const moduleSpec = this.getModuleById(moduleId);
+        const currentTilt = parseFloat(document.getElementById('tilt')?.value) || 15;
+        const currentAzimuth = parseFloat(document.getElementById('azimuth')?.value) || 180;
 
         let pWid = 1.0, pLen = 1.7;
         if (moduleSpec) {
@@ -366,86 +349,98 @@ class MapEngine {
             pLen = (orientation === 'portrait' ? moduleSpec.length_m : moduleSpec.width_m);
         }
 
-        const stepX = pWid + spacing;
-        const stepY = pLen + spacing;
+        // Solar Farm Spacing
+        // Column Spacing (Side-by-side): Tight (e.g. 0.05m clamps)
+        // Row Spacing (Pitch): Wide (Length + Gaps for shadow)
+        const colSpacing = 0.05;
+        const rowSpacing = 2.5; // Meters gap between rows (maintenance/shadow)
+
+        // Step X is along the Azimuth-90 vector (rows extend East-West)
+        // Step Y is along the Azimuth vector (columns extend North-South)
+        const stepX = pWid + colSpacing;
+        const stepY = pLen + rowSpacing;
+
+        // Grid Alignment Pattern: Align to SOLAR AZIMUTH, not fence.
+        // If Azimuth = 180 (South), Panels face South. Rows run East-West.
+        // We scan along this rotated grid.
+
+        const gridRotRad = np_radians(currentAzimuth);
 
         const earthRadius = 6378137;
         const dLat = (1 / earthRadius) * (180 / Math.PI);
         const dLng = dLat / Math.cos(lat0 * Math.PI / 180);
 
-        // Grid scan range (oversize to ensure coverage after rotation)
+        // Oversized Grid
         const radiusMeters = google.maps.geometry.spherical.computeDistanceBetween(bounds.getNorthEast(), bounds.getSouthWest()) / 2;
         const range = Math.ceil(radiusMeters / Math.min(stepX, stepY)) + 2;
 
-        const currentAzimuth = parseFloat(document.getElementById('azimuth')?.value) || 180;
-        const currentTilt = parseFloat(document.getElementById('tilt')?.value) || 15;
-
         let count = 0;
-        // Transform the grid using the roof angle
+
+        // Scan Grid
         for (let ix = -range; ix <= range; ix++) {
             for (let iy = -range; iy <= range; iy++) {
+                // Local Grid Coordinates
                 const lx = ix * stepX;
                 const ly = iy * stepY;
 
-                // Rotate local offsets (lx, ly) by roof angle
-                // Roof angle is angleRad (N=0, E=PI/2)
-                const rx = lx * Math.cos(angleRad) + ly * Math.sin(angleRad);
-                const ry = -lx * Math.sin(angleRad) + ly * Math.cos(angleRad);
+                // Rotate this point by the Azimuth to place it on the map
+                // Note: Standard rotation (x', y') = (x cos - y sin, x sin + y cos)
+                // But Azimuth defined 0=N, 90=E. 
+                // Grid X (Width) should be perpendicular (90 deg) to Azimuth?
+                // Actually: 
+                // If Az=180 (S). We want rows to be E-W. 
+                // So "Rows" are X axis. "Columns" are Y axis.
+                // Lets define X axis as Azimuth + 90. Y axis as Azimuth.
 
-                const cLat = lat0 + (ry * dLat);
-                const cLng = lng0 + (rx * dLng);
-                const pt = new google.maps.LatLng(cLat, cLng);
+                const xAxisAngle = gridRotRad + (Math.PI / 2); // E-W if Az=180
+                const yAxisAngle = gridRotRad;                // N-S if Az=180
 
-                // Check ONLY if center is inside? NO, check all 4 corners.
-                const panelPath = this.calculateRectCorners(cLat, cLng, pWid, pLen, angleDeg);
-                let allInside = true;
-                for (let corner of panelPath) {
-                    if (!google.maps.geometry.poly.containsLocation(new google.maps.LatLng(corner.lat, corner.lng), polygon)) {
-                        allInside = false;
-                        break;
+                // Project lx along X-Axis, ly along Y-Axis
+                const dx = lx * Math.sin(xAxisAngle) + ly * Math.sin(yAxisAngle);
+                const dy = lx * Math.cos(xAxisAngle) + ly * Math.cos(yAxisAngle);
+
+                const cLat = lat0 + (dy * dLat);
+                const cLng = lng0 + (dx * dLng);
+
+                // Collision Check logic...
+                const centerPt = new google.maps.LatLng(cLat, cLng);
+
+                // Check if Center is in Polygon (Fast Pass)
+                if (google.maps.geometry.poly.containsLocation(centerPt, polygon)) {
+
+                    // Check all 4 corners (Strict Pass)
+                    const panelPath = this.calculateRectCorners(cLat, cLng, pWid, pLen, currentAzimuth);
+                    let allInside = true;
+                    // Relaxed fit for farms: If center is in, and >50% corners are in?
+                    // Strict: All corners.
+                    for (let corner of panelPath) {
+                        if (!google.maps.geometry.poly.containsLocation(new google.maps.LatLng(corner.lat, corner.lng), polygon)) {
+                            allInside = false;
+                            break;
+                        }
                     }
-                }
 
-                if (allInside) {
-                    // OCD: Occlusion Check - Check against obstacles
-                    let occluded = false;
-                    for (let obs of this.obstacles) {
-                        const base = obs.base;
-                        const data = obs.data;
-
-                        if (data.type === 'tree') {
-                            // Point in Circle (Approximate with panel center and corners)
-                            const centers = [new google.maps.LatLng(cLat, cLng), ...panelPath.map(p => new google.maps.LatLng(p.lat, p.lng))];
-                            for (let pt_check of centers) {
-                                if (google.maps.geometry.spherical.computeDistanceBetween(pt_check, base.getCenter()) < (data.width / 2)) {
-                                    occluded = true;
-                                    break;
-                                }
-                            }
-                        } else {
-                            // Point in Polygon
-                            const centers = [new google.maps.LatLng(cLat, cLng), ...panelPath.map(p => new google.maps.LatLng(p.lat, p.lng))];
-                            for (let pt_check of centers) {
-                                if (google.maps.geometry.poly.containsLocation(pt_check, base)) {
-                                    occluded = true;
-                                    break;
-                                }
+                    if (allInside) {
+                        // Obstacle Check
+                        let occluded = false;
+                        for (let obs of this.obstacles) {
+                            if (google.maps.geometry.poly.containsLocation(centerPt, obs.base)) {
+                                occluded = true; break;
                             }
                         }
-                        if (occluded) break;
-                    }
 
-                    if (!occluded) {
-                        this.addPanel(cLng, cLat, 0, currentTilt, angleDeg, orientation, moduleSpec);
-                        count++;
+                        if (!occluded) {
+                            this.addPanel(cLng, cLat, 0, currentTilt, currentAzimuth, orientation, moduleSpec);
+                            count++;
+                        }
                     }
                 }
             }
         }
 
-        console.log(`Added ${count} panels aligned to roof (Angle: ${angleDeg.toFixed(1)}°)`);
+        console.log(`Solar Farm Layout: Added ${count} panels aligned to Azimuth ${currentAzimuth}°`);
         polygon.setMap(null);
-        if (count === 0) alert("0 Panels Added. Area too small or geometry mismatch.");
+        if (count === 0) alert("0 Panels Added. Try changing the Azimuth or drawing a larger area.");
     }
 
     /**
@@ -462,8 +457,8 @@ class MapEngine {
         const corners = [
             google.maps.geometry.spherical.computeOffset(center, dist, azimuthDegrees + (180 - angleOffset)), // BL
             google.maps.geometry.spherical.computeOffset(center, dist, azimuthDegrees + (180 + angleOffset)), // BR
-            google.maps.geometry.spherical.computeOffset(center, dist, azimuthDegrees + angleOffset),        // TR
-            google.maps.geometry.spherical.computeOffset(center, dist, azimuthDegrees - angleOffset)         // TL
+            google.maps.geometry.spherical.computeOffset(center, dist, azimuthDegrees - angleOffset),         // TL
+            google.maps.geometry.spherical.computeOffset(center, dist, azimuthDegrees + angleOffset)          // TR
         ];
 
         return corners.map(c => ({ lat: c.lat(), lng: c.lng() }));
