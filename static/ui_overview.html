@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>UniSolar | UI Overview</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-blue': '#0057B7',
+                        'solar-green': '#10B981',
+                        'bg-primary': '#FFFFFF',
+                        'bg-secondary': '#F8F9FA',
+                        'text-primary': '#111111',
+                        'text-secondary': '#555555',
+                        'text-tertiary': '#94A3B8',
+                    },
+                    fontFamily: {
+                        'heading': ['Lora', 'serif'],
+                        'body': ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #FFFFFF;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .sharp {
+            border-radius: 0 !important;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+
+<body class="bg-bg-primary text-text-primary p-12">
+    <div class="max-w-6xl mx-auto">
+        <header class="mb-16">
+            <h1 class="font-heading text-5xl font-semibold mb-4">UI Overview</h1>
+            <p class="text-text-secondary text-xl font-body max-w-2xl">A living showcase of the "Editorial Technical
+                Excellence" design system implementation for UniSolar.</p>
+        </header>
+
+        <section class="mb-20">
+            <h2 class="font-heading text-2xl font-bold mb-8 border-b pb-2 uppercase tracking-widest text-brand-blue">
+                Colors & Palette</h2>
+            <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+                <div class="space-y-2">
+                    <div class="h-24 bg-brand-blue shadow-sm"></div>
+                    <p class="font-bold text-xs uppercase">Brand Blue</p>
+                    <p class="text-xs text-text-tertiary">#0057B7</p>
+                </div>
+                <div class="space-y-2">
+                    <div class="h-24 bg-solar-green shadow-sm"></div>
+                    <p class="font-bold text-xs uppercase">Solar Green</p>
+                    <p class="text-xs text-text-tertiary">#10B981</p>
+                </div>
+                <div class="space-y-2">
+                    <div class="h-24 bg-bg-primary border border-slate-200"></div>
+                    <p class="font-bold text-xs uppercase">BG Primary</p>
+                    <p class="text-xs text-text-tertiary">#FFFFFF</p>
+                </div>
+                <div class="space-y-2">
+                    <div class="h-24 bg-bg-secondary border border-slate-200"></div>
+                    <p class="font-bold text-xs uppercase">BG Secondary</p>
+                    <p class="text-xs text-text-tertiary">#F8F9FA</p>
+                </div>
+                <div class="space-y-2">
+                    <div class="h-24 bg-text-primary"></div>
+                    <p class="font-bold text-xs uppercase">Text Primary</p>
+                    <p class="text-xs text-text-tertiary">#111111</p>
+                </div>
+                <div class="space-y-2">
+                    <div class="h-24 bg-text-secondary"></div>
+                    <p class="font-bold text-xs uppercase">Text Secondary</p>
+                    <p class="text-xs text-text-tertiary">#555555</p>
+                </div>
+                <div class="space-y-2">
+                    <div class="h-24 bg-text-tertiary"></div>
+                    <p class="font-bold text-xs uppercase">Text Tertiary</p>
+                    <p class="text-xs text-text-tertiary">#94A3B8</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-20">
+            <h2 class="font-heading text-2xl font-bold mb-8 border-b pb-2 uppercase tracking-widest text-brand-blue">
+                Typography</h2>
+            <div class="space-y-12">
+                <div>
+                    <h3 class="font-heading text-6xl font-semibold mb-2">Technical Excellence</h3>
+                    <p class="text-text-tertiary text-sm">Lora (Heading) - 6xl Semi-Bold</p>
+                </div>
+                <div>
+                    <h3 class="font-heading text-3xl font-medium mb-2">Solar Simulation Intelligence</h3>
+                    <p class="text-text-tertiary text-sm">Lora (Heading) - 3xl Medium</p>
+                </div>
+                <div>
+                    <p class="font-body text-lg leading-relaxed max-w-2xl">
+                        UniSolar 3D uses high-fidelity physics models to bridge the gap between architectural vision and
+                        utility-scale reality. Each photon is tracked with precision across the 5-layer simulation
+                        engine.
+                    </p>
+                    <p class="text-text-tertiary text-sm mt-4">Inter (Body) - lg Regular</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-20">
+            <h2 class="font-heading text-2xl font-bold mb-8 border-b pb-2 uppercase tracking-widest text-brand-blue">
+                Interactive Components</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-16">
+                <!-- Buttons -->
+                <div>
+                    <h3 class="font-heading text-lg font-bold mb-6 text-text-secondary uppercase tracking-tight">Buttons
+                        (Sharp Edges)</h3>
+                    <div class="flex flex-wrap gap-4">
+                        <button
+                            class="bg-brand-blue text-white px-8 py-3 font-bold uppercase tracking-widest text-xs transition hover:bg-black sharp">Primary
+                            Action</button>
+                        <button
+                            class="border-2 border-brand-blue text-brand-blue px-8 py-3 font-bold uppercase tracking-widest text-xs transition hover:bg-brand-blue hover:text-white sharp">Secondary</button>
+                        <button
+                            class="bg-bg-secondary text-text-secondary px-8 py-3 font-bold uppercase tracking-widest text-xs transition hover:bg-slate-200 sharp">Ghost</button>
+                    </div>
+                </div>
+
+                <!-- Sliders for Tuning -->
+                <div>
+                    <h3 class="font-heading text-lg font-bold mb-6 text-text-secondary uppercase tracking-tight">Tuning
+                        Sliders</h3>
+                    <div class="space-y-8 bg-bg-secondary p-8 sharp border border-slate-200">
+                        <div class="space-y-3">
+                            <div class="flex justify-between">
+                                <label
+                                    class="font-bold text-xs uppercase tracking-widest text-text-secondary">Irradiance
+                                    Bias (%)</label>
+                                <span class="font-heading font-bold text-brand-blue">+5.2%</span>
+                            </div>
+                            <input type="range"
+                                class="w-full h-1 bg-slate-200 appearance-none cursor-pointer accent-brand-blue"
+                                value="55">
+                        </div>
+                        <div class="space-y-3">
+                            <div class="flex justify-between">
+                                <label class="font-bold text-xs uppercase tracking-widest text-text-secondary">Soiling
+                                    Penalty</label>
+                                <span class="font-heading font-bold text-solar-green">0.12x</span>
+                            </div>
+                            <input type="range"
+                                class="w-full h-1 bg-slate-200 appearance-none cursor-pointer accent-solar-green"
+                                value="30">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="mb-20">
+            <h2 class="font-heading text-2xl font-bold mb-8 border-b pb-2 uppercase tracking-widest text-brand-blue">
+                Technical Cards</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div
+                    class="bg-bg-primary border border-slate-200 p-8 sharp hover:border-brand-blue transition-all group">
+                    <span class="text-brand-blue font-bold text-xs tracking-widest uppercase block mb-4">Layer 01</span>
+                    <h4 class="font-heading text-xl font-bold mb-4">Spatial Geometry</h4>
+                    <p class="text-text-secondary text-sm leading-loose">Spherical coordinate projection eliminating
+                        layout distortion across all global latitudes.</p>
+                </div>
+                <div
+                    class="bg-bg-primary border border-slate-200 p-8 sharp hover:border-brand-blue transition-all group">
+                    <span class="text-brand-blue font-bold text-xs tracking-widest uppercase block mb-4">Layer 04</span>
+                    <h4 class="font-heading text-xl font-bold mb-4">Loss Factorization</h4>
+                    <p class="text-text-secondary text-sm leading-loose">Automated calculation of shading, temperature,
+                        and environmental soiling losses.</p>
+                </div>
+                <div class="bg-bg-primary border border-brand-blue p-8 sharp shadow-lg bg-bg-secondary relative">
+                    <div
+                        class="absolute top-4 right-4 bg-brand-blue text-white text-[10px] px-2 py-1 font-bold uppercase sharp">
+                        Recommended</div>
+                    <span class="text-brand-blue font-bold text-xs tracking-widest uppercase block mb-4">Tier A</span>
+                    <h4 class="font-heading text-xl font-bold mb-4">Enterprise Analysis</h4>
+                    <p class="text-text-secondary text-sm leading-loose mb-6">Investment-grade reports with P50/P90
+                        probability modeling.</p>
+                    <button
+                        class="w-full bg-brand-blue text-white py-3 font-bold uppercase tracking-widest text-xs sharp">Select
+                        Tier</button>
+                </div>
+            </div>
+        </section>
+    </div>
+</body>
+
+</html>

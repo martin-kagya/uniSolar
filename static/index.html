@@ -4,915 +4,234 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UniSolar 3D | Professional Solar Dashboard</title>
+    <title>UniSolar | Physics-Grade Solar Simulation</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="/js/map_engine.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-
-    <!-- Google Maps JavaScript API -->
-    <script
-        src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=places,drawing,geometry&v=weekly"
-        async defer></script>
-
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-blue': '#0057B7',
+                        'solar-green': '#10B981',
+                        'bg-primary': '#FFFFFF',
+                        'bg-secondary': '#F8F9FA',
+                        'text-primary': '#111111',
+                        'text-secondary': '#555555',
+                    },
+                    fontFamily: {
+                        'heading': ['Lora', 'serif'],
+                        'body': ['Inter', 'sans-serif'],
+                    }
+                }
+            }
+        }
+    </script>
     <style>
-        :root {
-            --bg: #f8fafc;
-            --sidebar: #ffffff;
-            --header: #ffffff;
-            --accent: #f59e0b;
-            --accent-soft: rgba(245, 158, 11, 0.1);
-            --border: #e2e8f0;
-            --text-main: #0f172a;
-            --text-muted: #64748b;
+        .sharp {
+            border-radius: 0 !important;
         }
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background: var(--bg);
-            color: var(--text-main);
-            overflow: hidden;
-            margin: 0;
-        }
-
-        h1,
-        h2,
-        h3 {
-            font-family: 'Outfit', sans-serif;
-        }
-
-        .sidebar {
-            position: fixed;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            width: 280px;
-            background: var(--sidebar);
-            border-right: 1px solid var(--border);
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            padding: 24px 0;
-        }
-
-        .header {
-            position: fixed;
-            top: 0;
-            left: 280px;
-            right: 0;
-            height: 70px;
-            background: var(--header);
-            border-bottom: 1px solid var(--border);
-            z-index: 900;
-            display: flex;
-            align-items: center;
-            padding: 0 32px;
-            gap: 24px;
-        }
-
-        .nav-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px 24px;
-            color: var(--text-muted);
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            border-left: 3px solid transparent;
-        }
-
-        .nav-item:hover,
-        .nav-item.active {
-            color: var(--accent);
-            background: var(--accent-soft);
-            border-left-color: var(--accent);
-        }
-
-        .viewport-container {
-            position: absolute;
-            left: 280px;
-            top: 70px;
-            right: 0;
-            bottom: 0;
-            background: #e5e7eb;
-        }
-
-        .floating-results {
-            position: absolute;
-            bottom: 24px;
-            right: 24px;
-            width: 320px;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            border: 1px solid var(--border);
-            padding: 20px;
-            z-index: 800;
-        }
-
-        .dropdown-island {
-            background: #f1f5f9;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            padding: 6px 12px;
-            display: flex;
-            flex-direction: column;
-        }
-
-        .dropdown-island label {
-            font-size: 10px;
-            font-weight: 700;
-            color: var(--text-muted);
-            text-transform: uppercase;
-        }
-
-        .dropdown-island select,
-        .dropdown-island input {
-            background: transparent;
-            border: none;
-            font-size: 13px;
-            font-weight: 600;
-            color: var(--text-main);
-            outline: none;
-            cursor: pointer;
-        }
-
-        .tool-btn {
-            width: 44px;
-            height: 44px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: white;
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            color: var(--text-muted);
-            transition: all 0.2s;
-            cursor: pointer;
-        }
-
-        .tool-btn:hover {
-            color: var(--accent);
-            border-color: var(--accent);
-            background: var(--accent-soft);
-        }
-
-        /* Modal Styles */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(15, 23, 42, 0.5);
-            backdrop-filter: blur(4px);
-            z-index: 2000;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 40px;
-        }
-
-        .modal-content {
-            background: white;
-            width: 100%;
-            max-width: 1100px;
-            max-height: 90vh;
-            border-radius: 24px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-        }
-
-        .chart-container {
-            height: 200px;
+        .hero-gradient {
+            background: radial-gradient(circle at top right, rgba(0, 87, 183, 0.05), transparent 40%);
             position: relative;
+            overflow: hidden;
+        }
+
+        #sun-path {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .sun-icon {
+            filter: drop-shadow(0 0 15px rgba(245, 158, 11, 0.6));
         }
     </style>
 </head>
 
-<body>
-    <!-- Sidebar -->
-    <div class="sidebar">
-        <div class="px-6 mb-8 flex items-center gap-3">
-            <div class="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center text-white">
-                <i data-lucide="sun" class="w-6 h-6"></i>
-            </div>
-            <div>
-                <h1 class="text-xl font-bold tracking-tight">UniSolar<span class="text-amber-500">3D</span></h1>
-                <p class="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enterprise Edition</p>
+<body class="bg-bg-primary text-text-primary font-body">
+
+    <!-- Navigation -->
+    <nav class="flex justify-between items-center px-20 py-8 border-b border-slate-100">
+        <div class="font-heading text-2xl font-bold tracking-tight uppercase">UNISOLAR</div>
+        <div class="hidden md:flex gap-12 font-bold text-xs uppercase tracking-widest text-text-secondary">
+            <a href="/dashboard" class="hover:text-brand-blue transition">Simulation</a>
+            <a href="/dashboard" class="hover:text-brand-blue transition">Sizing</a>
+            <a href="/ui_overview.html" class="hover:text-brand-blue transition">Logic</a>
+            <a href="#" class="hover:text-brand-blue transition">Pricing</a>
+        </div>
+        <a href="/dashboard"
+            class="bg-brand-blue text-white px-8 py-3 text-xs font-bold uppercase tracking-widest hover:bg-black transition sharp">Try
+            Free</a>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="px-20 py-24 hero-gradient">
+        <svg id="sun-path" viewBox="0 0 1000 500" preserveAspectRatio="none">
+            <path id="trajectory" d="M -100 400 Q 500 -100 1100 400" fill="none" stroke="rgba(0,87,183,0.05)"
+                stroke-width="2" stroke-dasharray="8 8" />
+            <g id="sun-group" class="sun-icon">
+                <circle cx="0" cy="0" r="12" fill="#F59E0B" />
+                <circle cx="0" cy="0" r="20" fill="#F59E0B" fill-opacity="0.2" />
+            </g>
+        </svg>
+        <div class="max-w-4xl mx-auto text-center">
+            <h1 class="font-heading text-7xl font-semibold mb-8 leading-[1.1] tracking-tight">
+                From Solar Planning to <span class="italic font-normal">Physics-Grade</span> Accuracy
+            </h1>
+            <p class="text-text-secondary text-xl font-body mb-12 max-w-2xl mx-auto leading-relaxed">
+                Simulate the future of your energy project with AI-driven sizing and high-precision yield modeling.
+            </p>
+            <div class="flex gap-4 justify-center">
+                <a href="/dashboard"
+                    class="bg-brand-blue text-white px-10 py-4 font-bold uppercase tracking-widest text-xs transition hover:bg-black sharp">
+                    Run Simulation
+                </a>
+                <a href="/ui_overview.html"
+                    class="border border-slate-200 bg-white text-text-primary px-10 py-4 font-bold uppercase tracking-widest text-xs transition hover:bg-bg-secondary sharp">
+                    View Design Specs
+                </a>
             </div>
         </div>
 
-        <nav class="flex-1">
-            <div class="nav-item active" onclick="showTab('design')">
-                <i data-lucide="layout"></i>
-                <span>Asset Design</span>
-            </div>
-            <div class="nav-item" onclick="showTab('sizing')">
-                <i data-lucide="calculator"></i>
-                <span>Sizing Hub</span>
-            </div>
-            <div class="nav-item" onclick="showTab('reports')">
-                <i data-lucide="file-text"></i>
-                <span>Reports</span>
-            </div>
-        </nav>
+    </section>
 
-        <!-- Sizing Context (Conditional) -->
-        <div id="sizingTab" class="hidden px-6 py-8 border-t border-slate-100">
-            <h3 class="text-xs font-bold text-slate-400 uppercase mb-4 tracking-wider">Sizing Assistant</h3>
-            <div class="space-y-4">
-                <div class="dropdown-island">
-                    <label>Sizing Mode</label>
-                    <select id="sizingMode">
-                        <option value="bill">Monthly Bill</option>
-                        <option value="kwh">Monthly Consumption</option>
-                    </select>
+    <!-- 5-Layer Engine Section -->
+    <section class="bg-bg-secondary px-20 py-32">
+        <div class="text-center mb-16">
+            <span
+                class="text-brand-blue font-bold text-xs tracking-[0.2em] uppercase mb-4 block underline underline-offset-8">Core
+                Capabilities</span>
+            <h2 class="font-heading text-4xl font-bold mt-6">Physics-Grade Intelligence for Solar Projects</h2>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 max-w-7xl mx-auto">
+            <!-- Card 1 -->
+            <div
+                class="bg-white border border-slate-200 p-8 h-80 flex flex-col justify-between transition hover:border-brand-blue sharp">
+                <div>
+                    <span
+                        class="font-body font-bold text-[10px] uppercase tracking-widest text-brand-blue mb-4 block">01</span>
+                    <h3 class="font-heading text-xl font-bold mb-4">Spatial Geometry</h3>
                 </div>
-                <div class="dropdown-island">
-                    <label id="sizingLabel">Monthly Bill (GH₵)</label>
-                    <input type="number" id="sizingInput" placeholder="e.g. 1500">
+                <p class="text-text-secondary text-sm leading-relaxed">3D obstruction detection and mapping for
+                    millimeter-precise panel placement.</p>
+            </div>
+            <!-- Card 2 -->
+            <div
+                class="bg-white border border-slate-200 p-8 h-80 flex flex-col justify-between transition hover:border-brand-blue sharp">
+                <div>
+                    <span
+                        class="font-body font-bold text-[10px] uppercase tracking-widest text-brand-blue mb-4 block">02</span>
+                    <h3 class="font-heading text-xl font-bold mb-4">Solar Irradiation</h3>
                 </div>
-                <button id="calculateSizingBtn"
-                    class="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-colors">
-                    Calculate System
-                </button>
+                <p class="text-text-secondary text-sm leading-relaxed">GHI/DNI modeling using advanced NASA and
+                    Meteonorm meteorological datasets.</p>
             </div>
-            <div id="sizingResults" class="mt-6 space-y-3 hidden">
-                <!-- Sizing Results Injection -->
-            </div>
-        </div>
-
-        <div class="px-6 py-8 border-t border-slate-100">
-            <h3 class="text-xs font-bold text-slate-400 uppercase mb-4 tracking-wider">Design Palette</h3>
-            <div class="grid grid-cols-2 gap-3">
-                <div id="dragPanel" class="palette-item group" draggable="true">
-                    <div
-                        class="w-full aspect-square bg-slate-50 rounded-lg flex items-center justify-center mb-2 group-hover:bg-amber-50 group-active:scale-95 transition-all">
-                        <i data-lucide="grid-3x3" class="w-6 h-6 text-slate-400 group-hover:text-amber-500"></i>
-                    </div>
-                    <span class="text-[10px] font-bold text-slate-500 group-hover:text-amber-600">Solar Panel</span>
+            <!-- Card 3 -->
+            <div
+                class="bg-white border border-slate-200 p-8 h-80 flex flex-col justify-between transition hover:border-brand-blue sharp">
+                <div>
+                    <span
+                        class="font-body font-bold text-[10px] uppercase tracking-widest text-brand-blue mb-4 block">03</span>
+                    <h3 class="font-heading text-xl font-bold mb-4">Hardware Performance</h3>
                 </div>
-                <div id="dragStructure" class="palette-item group" draggable="true">
-                    <div
-                        class="w-full aspect-square bg-slate-50 rounded-lg flex items-center justify-center mb-2 group-hover:bg-blue-50 group-active:scale-95 transition-all">
-                        <i data-lucide="box" class="w-6 h-6 text-slate-400 group-hover:text-blue-500"></i>
-                    </div>
-                    <span class="text-[10px] font-bold text-slate-500 group-hover:text-blue-600">Structure</span>
+                <p class="text-text-secondary text-sm leading-relaxed">Dynamic simulation of Panel/Inverter efficiency
+                    under variable thermal loads.</p>
+            </div>
+            <!-- Card 4 -->
+            <div
+                class="bg-white border border-slate-200 p-8 h-80 flex flex-col justify-between transition hover:border-brand-blue sharp">
+                <div>
+                    <span
+                        class="font-body font-bold text-[10px] uppercase tracking-widest text-brand-blue mb-4 block">04</span>
+                    <h3 class="font-heading text-xl font-bold mb-4">Loss Factorization</h3>
                 </div>
-                <div id="dragTree" class="palette-item group" draggable="true">
-                    <div
-                        class="w-full aspect-square bg-slate-50 rounded-lg flex items-center justify-center mb-2 group-hover:bg-green-50 group-active:scale-95 transition-all">
-                        <i data-lucide="trees" class="w-6 h-6 text-slate-400 group-hover:text-green-500"></i>
-                    </div>
-                    <span class="text-[10px] font-bold text-slate-500 group-hover:text-green-600">Tree</span>
+                <p class="text-text-secondary text-sm leading-relaxed">Physics-based modeling of shading, soiling, and
+                    cabling losses for forecasting.</p>
+            </div>
+            <!-- Card 5 -->
+            <div
+                class="bg-white border border-slate-200 p-8 h-80 flex flex-col justify-between transition hover:border-brand-blue sharp">
+                <div>
+                    <span
+                        class="font-body font-bold text-[10px] uppercase tracking-widest text-brand-blue mb-4 block">05</span>
+                    <h3 class="font-heading text-xl font-bold mb-4">Financial Intelligence</h3>
+                </div>
+                <p class="text-text-secondary text-sm leading-relaxed">High-precision ROI and LCOE analytics generated
+                    for bankable reports.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-bg-primary border-t border-slate-100 px-20 py-24">
+        <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between gap-16">
+            <div class="max-w-xs">
+                <div class="font-heading text-2xl font-bold tracking-tight uppercase mb-6">UNISOLAR</div>
+                <p class="text-text-secondary text-sm leading-loose">The industry standard for utility-scale solar
+                    simulation in West Africa. Engineered for precision, built for stability.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-16">
+                <div class="space-y-4">
+                    <p class="font-bold text-[10px] uppercase tracking-widest text-brand-blue">Links</p>
+                    <ul class="text-sm space-y-2 text-text-secondary font-medium">
+                        <li><a href="/dashboard" class="hover:text-brand-blue">Simulator</a></li>
+                        <li><a href="/dashboard" class="hover:text-brand-blue">Sizing Hub</a></li>
+                        <li><a href="/ui_overview.html" class="hover:text-brand-blue">Design System</a></li>
+                    </ul>
+                </div>
+                <div class="space-y-4">
+                    <p class="font-bold text-[10px] uppercase tracking-widest text-brand-blue">Legal</p>
+                    <ul class="text-sm space-y-2 text-text-secondary font-medium">
+                        <li><a href="#" class="hover:text-brand-blue">Privacy API</a></li>
+                        <li><a href="#" class="hover:text-brand-blue">Terms</a></li>
+                        <li><a href="#" class="hover:text-brand-blue">Scientific Footprint</a></li>
+                    </ul>
                 </div>
             </div>
         </div>
-    </div>
-
-    <!-- Header -->
-    <header class="header">
-        <div class="flex-1 flex items-center bg-slate-100 rounded-xl px-4 py-2 border border-slate-200">
-            <i data-lucide="search" class="w-4 h-4 text-slate-400 mr-2"></i>
-            <input type="text" id="locSearch" placeholder="Search project location in Ghana..."
-                class="bg-transparent border-none outline-none text-sm w-full font-medium">
-        </div>
-
-        <div class="flex items-center gap-3">
-            <div class="dropdown-island">
-                <label>Sim Year</label>
-                <select id="simYear">
-                    <option value="2023">2023</option>
-                    <option value="2024">2024</option>
-                </select>
-            </div>
-            <div class="dropdown-island">
-                <label>Module</label>
-                <select id="moduleSelect"></select>
-            </div>
-            <div class="dropdown-island">
-                <label>Tilt</label>
-                <input type="number" id="tilt" value="15" min="0" max="90" step="1" style="width: 40px;">
-            </div>
-            <div class="dropdown-island">
-                <label>Azimuth</label>
-                <input type="number" id="azimuth" value="180" min="0" max="359" step="1" style="width: 50px;">
-            </div>
-            <div class="dropdown-island">
-                <label>Rate</label>
-                <input type="number" id="rate" value="1.93" step="0.01" style="width: 50px;">
-                <input type="hidden" id="lat" value="8.26148">
-                <input type="hidden" id="lon" value="-2.24555">
-            </div>
-        </div>
-
-        <div class="h-8 w-[1px] bg-slate-200 mx-2"></div>
-
-        <button id="runSimBtn"
-            class="px-6 py-2.5 bg-amber-500 text-white rounded-xl font-bold text-sm shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all flex items-center gap-2">
-            <i data-lucide="play" class="w-4 h-4"></i>
-            RUN SIMULATION
-        </button>
-    </header>
-
-    <!-- Main Workspace -->
-    <div class="viewport-container">
-        <div id="viewport" class="w-full h-full"></div>
-
-        <!-- Map Tools -->
-        <div class="absolute top-6 right-6 flex flex-col gap-2">
-            <button id="drawRoofBtn" class="tool-btn" title="Draw Roof Area">
-                <i data-lucide="pen-tool"></i>
-            </button>
-            <button id="clearPanelsBtn" class="tool-btn" title="Clear Design">
-                <i data-lucide="trash-2"></i>
-            </button>
-        </div>
-
-        <!-- Sun Control Slider -->
         <div
-            class="absolute bottom-8 left-1/2 -translate-x-1/2 bg-white/90 backdrop-blur-md px-6 py-4 rounded-2xl shadow-2xl border border-white flex items-center gap-6 z-50">
-            <div class="flex flex-col">
-                <span class="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Simulated
-                    Time</span>
-                <span id="timeLabel" class="text-sm font-bold text-slate-900">12:00 PM</span>
-            </div>
-            <input type="range" id="timeSlider" min="6" max="18" step="0.5" value="12"
-                class="w-48 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-500">
-            <div class="h-8 w-[1px] bg-slate-200"></div>
-            <div class="flex gap-4">
-                <div class="flex flex-col">
-                    <span
-                        class="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Azimuth</span>
-                    <span id="sunAzLabel" class="text-xs font-bold text-slate-700">180°</span>
-                </div>
-                <div class="flex flex-col">
-                    <span
-                        class="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1">Zenith</span>
-                    <span id="sunZenLabel" class="text-xs font-bold text-slate-700">45°</span>
-                </div>
+            class="mt-24 pt-8 border-t border-slate-100 flex justify-between items-center text-[10px] uppercase font-bold tracking-[0.2em] text-text-secondary">
+            <span>© 2026 UniSolar AI. Scientific Edition.</span>
+            <div class="flex gap-8">
+                <a href="#">Twitter</a>
+                <a href="#">LinkedIn</a>
+                <a href="#">GitHub</a>
             </div>
         </div>
+    </footer>
 
-        <!-- Dynamic Results Card -->
-        <div id="resultsArea" class="floating-results" style="display: none;">
-            <div class="flex justify-between items-start mb-6">
-                <div>
-                    <h2 class="text-sm font-bold text-slate-400 uppercase tracking-widest">Yield Estimates</h2>
-                    <p class="text-3xl font-bold text-slate-900"><span id="resEnergy">0</span> <span
-                            class="text-sm font-normal text-slate-400">kWh/yr</span></p>
-                </div>
-                <div class="p-2 bg-emerald-50 text-emerald-600 rounded-lg">
-                    <i data-lucide="trending-up" class="w-5 h-5"></i>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-2 gap-4 mb-6">
-                <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">NPV (25yr)</p>
-                    <p id="resNPV" class="text-lg font-bold text-slate-900">GH₵ 0</p>
-                </div>
-                <div class="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                    <p class="text-[10px] font-bold text-slate-400 uppercase">Payback</p>
-                    <p id="resPayback" class="text-lg font-bold text-slate-900">0.0 yr</p>
-                </div>
-            </div>
-
-            <button id="viewDetailsBtn"
-                class="w-full py-3 bg-slate-900 text-white rounded-xl font-bold text-sm hover:bg-slate-800 transition-all flex items-center justify-center gap-2">
-                <i data-lucide="bar-chart-2" class="w-4 h-4"></i>
-                VIEW SCIENTIFIC ANALYTICS
-            </button>
-        </div>
-    </div>
-
-    <!-- Analytics Modal -->
-    <div id="analyticsModal" class="modal-overlay">
-        <div class="modal-content">
-            <div class="p-8 border-b border-slate-100 flex justify-between items-center">
-                <div>
-                    <h2 class="text-2xl font-bold text-slate-900">Scientific System Analysis</h2>
-                    <p class="text-sm text-slate-500">Comprehensive yield, loss, and financial performance breakdown</p>
-                </div>
-                <button id="closeModalBtn" class="p-4 bg-slate-100 hover:bg-slate-200 rounded-2xl transition-all">
-                    <i data-lucide="x" class="w-6 h-6"></i>
-                </button>
-            </div>
-
-            <div class="flex-1 overflow-y-auto p-8 bg-slate-50">
-                <div class="grid grid-cols-2 gap-8 mb-8">
-                    <!-- Chart 1: Loss Waterfall -->
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="font-bold text-slate-700 flex items-center gap-2">
-                                <i data-lucide="droplet" class="w-4 h-4 text-amber-500"></i>
-                                Loss Waterfall (%)
-                            </h3>
-                        </div>
-                        <div class="chart-container">
-                            <canvas id="lossChart"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- Chart 2: Hourly Gen Curve -->
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="font-bold text-slate-700 flex items-center gap-2">
-                                <i data-lucide="activity" class="w-4 h-4 text-blue-500"></i>
-                                Standard Day Curve (W)
-                            </h3>
-                        </div>
-                        <div class="chart-container">
-                            <canvas id="hourlyChart"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- Chart 3: Monthly Seasonality -->
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="font-bold text-slate-700 flex items-center gap-2">
-                                <i data-lucide="calendar" class="w-4 h-4 text-purple-500"></i>
-                                Monthly Yield Distribution
-                            </h3>
-                        </div>
-                        <div class="chart-container">
-                            <canvas id="monthlyChart"></canvas>
-                        </div>
-                    </div>
-
-                    <!-- Chart 4: ROI / Cashflow -->
-                    <div class="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm">
-                        <div class="flex justify-between items-center mb-6">
-                            <h3 class="font-bold text-slate-700 flex items-center gap-2">
-                                <i data-lucide="dollar-sign" class="w-4 h-4 text-emerald-500"></i>
-                                Cumulative ROI (GH₵)
-                            </h3>
-                        </div>
-                        <div class="chart-container">
-                            <canvas id="roiChart"></canvas>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="p-8 border-t border-slate-100 flex justify-end gap-3 bg-white">
-                <button id="exportCsvBtn"
-                    class="px-6 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-all flex items-center gap-2">
-                    <i data-lucide="download" class="w-4 h-4"></i>
-                    EXPORT CSV
-                </button>
-                <button id="exportPdfBtn"
-                    class="px-6 py-3 bg-amber-500 text-white rounded-xl font-bold hover:bg-amber-600 transition-all flex items-center gap-2">
-                    <i data-lucide="file-text" class="w-4 h-4"></i>
-                    GENERATE PDF REPORT
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Scripts -->
     <script>
-        let engine = null;
-        let map = null;
-        let charts = {};
+        document.addEventListener('DOMContentLoaded', () => {
+            const path = document.getElementById('trajectory');
+            const sun = document.getElementById('sun-group');
+            const pathLength = path.getTotalLength();
 
-        // Sidebar Navigation
-        window.showTab = (tabId) => {
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            const activeNav = document.querySelector(`[onclick="showTab('${tabId}')"]`);
-            if (activeNav) activeNav.classList.add('active');
+            function updateSun() {
+                const scrollY = window.scrollY;
+                const section = document.querySelector('.hero-gradient');
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.offsetHeight;
 
-            const sizingTab = document.getElementById('sizingTab');
-            if (tabId === 'sizing') sizingTab.classList.remove('hidden');
-            else sizingTab.classList.add('hidden');
-        };
+                // Calculate progress based on scroll within the hero section (plus a bit of buffer)
+                let progress = (scrollY - sectionTop + 200) / (sectionHeight + 400);
+                progress = Math.max(0, Math.min(progress, 1));
 
-        // Lucide Icons
-        function initIcons() {
-            if (window.lucide) {
-                lucide.createIcons();
-            }
-        }
-
-        async function waitForGoogleMaps() {
-            const check = async () => {
-                if (window.google && window.google.maps && window.MapEngine) {
-                    initApp();
-                } else {
-                    setTimeout(check, 100);
-                }
-            };
-            check();
-        }
-
-        async function initApp() {
-            const viewport = document.getElementById('viewport');
-
-            // Create Google Map
-            map = new google.maps.Map(viewport, {
-                center: { lat: 8.26148, lng: -2.24555 },
-                zoom: 17,
-                mapTypeId: 'satellite',
-                tilt: 45,
-                heading: 0,
-                mapId: 'SOLAR_MAP_ID_1'
-            });
-
-            engine = new MapEngine(map);
-            initIcons();
-
-            // Search Box (Nominatim)
-            const input = document.getElementById('locSearch');
-            input.addEventListener('keypress', async (e) => {
-                if (e.key === 'Enter') {
-                    const query = input.value.trim();
-                    if (!query) return;
-                    try {
-                        const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query + ', Ghana')}&format=json&limit=1`);
-                        const results = await res.json();
-                        if (results.length > 0) {
-                            const { lat, lon } = results[0];
-                            map.panTo({ lat: parseFloat(lat), lng: parseFloat(lon) });
-                            map.setZoom(20);
-                            document.getElementById('lat').value = lat;
-                            document.getElementById('lon').value = lon;
-                        }
-                    } catch (e) { console.error("Search error", e); }
-                }
-            });
-
-            // Initial Load
-            await fetchModules();
-            updateSunVisuals(12);
-            setupEventListeners();
-        }
-
-        async function fetchModules() {
-            try {
-                const res = await fetch('/modules');
-                const modules = await res.json();
-                const select = document.getElementById('moduleSelect');
-                select.innerHTML = modules.map(m => `<option value="${m.id}">${m.name} (${m.power_wp}W)</option>`).join('');
-                if (modules.length > 0) {
-                    const first = modules[0];
-                    engine.setModules(modules);
-                    engine.updateConfigurations({ moduleSpec: first });
-                }
-            } catch (e) { console.error("Failed to load modules"); }
-        }
-
-        function setupEventListeners() {
-            const viewport = document.getElementById('viewport');
-
-            // Drag and Drop
-            ['dragPanel', 'dragStructure', 'dragTree'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.addEventListener('dragstart', (e) => {
-                        let type = 'panel';
-                        if (id === 'dragStructure') type = 'structure';
-                        if (id === 'dragTree') type = 'tree';
-                        e.dataTransfer.setData('type', type);
-                    });
-                }
-            });
-
-            viewport.addEventListener('dragover', (e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = 'copy';
-            });
-
-            viewport.addEventListener('drop', (e) => {
-                e.preventDefault();
-                const type = e.dataTransfer.getData('type');
-                const rect = viewport.getBoundingClientRect();
-                const overlay = new google.maps.OverlayView();
-                overlay.draw = () => { };
-                overlay.setMap(map);
-
-                setTimeout(() => {
-                    const projection = overlay.getProjection();
-                    if (projection) {
-                        const latLng = projection.fromContainerPixelToLatLng(new google.maps.Point(e.clientX - rect.left, e.clientY - rect.top));
-                        if (type === 'panel') {
-                            const spec = engine.getModuleById(document.getElementById('moduleSelect').value);
-                            engine.addPanel(latLng.lng(), latLng.lat(), 15, parseFloat(document.getElementById('tilt').value), parseFloat(document.getElementById('azimuth').value), 'portrait', spec);
-                        } else if (type === 'structure') {
-                            engine.addObstacle(latLng.lng(), latLng.lat(), 'chimney', 2.5, 1.2);
-                        } else if (type === 'tree') {
-                            engine.addObstacle(latLng.lng(), latLng.lat(), 'tree', 5.0, 4.0);
-                        }
-                    }
-                    overlay.setMap(null);
-                }, 0);
-            });
-
-            // Tools
-            document.getElementById('clearPanelsBtn').addEventListener('click', () => engine.clear());
-            document.getElementById('drawRoofBtn').addEventListener('click', () => {
-                const dm = new google.maps.drawing.DrawingManager({
-                    drawingMode: google.maps.drawing.OverlayType.POLYGON,
-                    drawingControl: false,
-                    polygonOptions: { fillColor: '#3b82f6', fillOpacity: 0.3, strokeWeight: 2, strokeColor: '#2563eb', zIndex: 1 }
-                });
-                dm.setMap(map);
-                google.maps.event.addListener(dm, 'polygoncomplete', (poly) => {
-                    dm.setDrawingMode(null);
-                    engine.fillPolygon(poly);
-                });
-            });
-
-            document.getElementById('runSimBtn').addEventListener('click', runSimulation);
-
-            // Sun Slider
-            const timeSlider = document.getElementById('timeSlider');
-            if (timeSlider) {
-                timeSlider.addEventListener('input', (e) => {
-                    const hour = parseFloat(e.target.value);
-                    const h = Math.floor(hour);
-                    const ampm = h >= 12 ? 'PM' : 'AM';
-                    const displayH = h % 12 || 12;
-                    const m = (hour % 1) * 60;
-                    document.getElementById('timeLabel').innerText = `${displayH}:${m === 0 ? '00' : '30'} ${ampm}`;
-                    updateSunVisuals(hour);
-                });
+                const point = path.getPointAtLength(progress * pathLength);
+                sun.setAttribute('transform', `translate(${point.x}, ${point.y})`);
             }
 
-            // Modal
-            document.getElementById('viewDetailsBtn').addEventListener('click', () => {
-                if (!window.lastSimulationData) { alert("Run simulation first"); return; }
-                document.getElementById('analyticsModal').style.display = 'flex';
-                renderCharts(window.lastSimulationData);
-                setTimeout(() => initIcons(), 100);
-            });
-            document.getElementById('closeModalBtn').addEventListener('click', () => {
-                document.getElementById('analyticsModal').style.display = 'none';
-            });
-
-            // Exports
-            document.getElementById('exportPdfBtn').addEventListener('click', async () => {
-                if (!window.lastSimulationData) return;
-                const res = await fetch('/report', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(window.lastSimulationData)
-                });
-                const blob = await res.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `UniSolar_Report.pdf`;
-                a.click();
-            });
-
-            document.getElementById('exportCsvBtn').addEventListener('click', async () => {
-                if (!window.lastSimulationData) return;
-                const res = await fetch('/export-csv', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(window.lastSimulationData)
-                });
-                const blob = await res.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `UniSolar_Export.csv`;
-                a.click();
-            });
-
-            // Sizing
-            document.getElementById('sizingMode').addEventListener('change', (e) => {
-                document.getElementById('sizingLabel').innerText = e.target.value === 'bill' ? 'Monthly Bill (GH₵)' : 'Monthly kWh';
-            });
-            document.getElementById('calculateSizingBtn').addEventListener('click', calculateSizing);
-
-            // Reactive config
-            ['tilt', 'azimuth', 'moduleSelect'].forEach(id => {
-                const el = document.getElementById(id);
-                if (el) {
-                    el.addEventListener('change', () => {
-                        engine.updateConfigurations({
-                            tilt: parseFloat(document.getElementById('tilt').value),
-                            azimuth: parseFloat(document.getElementById('azimuth').value),
-                            moduleSpec: engine.getModuleById(document.getElementById('moduleSelect').value)
-                        });
-                    });
-                }
-            });
-        }
-
-        function updateSunVisuals(hour) {
-            const lat = parseFloat(document.getElementById('lat').value || 5.6037);
-            const lon = parseFloat(document.getElementById('lon').value || -0.1870);
-            const dayOfYear = 172;
-            const declination = 23.45 * Math.sin((Math.PI / 180) * (360 / 365) * (dayOfYear - 81));
-            const hourAngle = (hour - 12) * 15;
-            const latRad = lat * Math.PI / 180;
-            const decRad = declination * Math.PI / 180;
-            const hrRad = hourAngle * Math.PI / 180;
-            const sinEl = Math.sin(latRad) * Math.sin(decRad) + Math.cos(latRad) * Math.cos(decRad) * Math.cos(hrRad);
-            const elRad = Math.asin(sinEl);
-            const zenith = 90 - (elRad * 180 / Math.PI);
-            const cosAz = (Math.sin(decRad) - Math.sin(elRad) * Math.sin(latRad)) / (Math.cos(elRad) * Math.cos(latRad));
-            let azimuth = Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180 / Math.PI;
-            if (hourAngle > 0) azimuth = 360 - azimuth;
-            document.getElementById('sunAzLabel').innerText = Math.round(azimuth) + '°';
-            document.getElementById('sunZenLabel').innerText = Math.round(zenith) + '°';
-            if (engine) engine.setSunPosition(azimuth, zenith);
-        }
-
-        async function calculateSizing() {
-            const mode = document.getElementById('sizingMode').value;
-            const val = parseFloat(document.getElementById('sizingInput').value);
-            if (!val) return;
-            const btn = document.getElementById('calculateSizingBtn');
-            btn.innerText = "Processing...";
-            try {
-                const res = await fetch('/size-system', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        latitude: parseFloat(document.getElementById('lat').value),
-                        longitude: parseFloat(document.getElementById('lon').value),
-                        electricity_rate: parseFloat(document.getElementById('rate').value),
-                        [mode === 'bill' ? 'monthly_bill_ghs' : 'monthly_consumption_kwh']: val
-                    })
-                });
-                if (!res.ok) {
-                    const err = await res.json();
-                    throw new Error(err.detail || "Sizing failed");
-                }
-                const data = await res.json();
-                document.getElementById('sizingResults').innerHTML = `
-                    <div class="bg-amber-50 p-4 rounded-xl border border-amber-100">
-                        <p class="text-[10px] font-bold text-amber-600 uppercase mb-1">Target Size</p>
-                        <p class="text-2xl font-bold text-slate-900">${data.required_kwp} <span class="text-sm font-normal text-slate-400">kWp</span></p>
-                    </div>
-                    ${data.recommendations.map(r => `
-                        <div class="flex justify-between items-center p-3 bg-slate-50 rounded-xl border border-slate-100">
-                            <span class="text-xs font-bold text-slate-600">${r.panel}</span>
-                            <span class="text-sm font-bold text-slate-900">${r.count} <span class="text-[10px] text-slate-400 font-normal">units</span></span>
-                        </div>
-                    `).join('')}
-                `;
-                document.getElementById('sizingResults').classList.remove('hidden');
-            } catch (e) {
-                alert(`Sizing failed: ${e.message}`);
-                console.error(e);
-            }
-            btn.innerText = "Calculate System";
-        }
-
-        async function runSimulation() {
-            if (!engine || engine.getPanelCount() === 0) { alert("Add panels first"); return; }
-            const btn = document.getElementById('runSimBtn');
-            btn.innerText = "SIMULATING...";
-            try {
-                const panels = engine.getPanels();
-                const obstacles = engine.getObstacles();
-                const moduleId = document.getElementById('moduleSelect').value;
-                const moduleSpec = engine.getModuleById(moduleId);
-                const payload = {
-                    latitude: parseFloat(document.getElementById('lat').value),
-                    longitude: parseFloat(document.getElementById('lon').value),
-                    capacity_kw: (panels.length * moduleSpec.power_wp) / 1000,
-                    tilt: parseFloat(document.getElementById('tilt').value),
-                    azimuth: parseFloat(document.getElementById('azimuth').value),
-                    module_name: moduleId,
-                    electricity_rate: parseFloat(document.getElementById('rate').value),
-                    year: parseInt(document.getElementById('simYear').value),
-                    panels: panels.map(p => ({ id: p.id, x: p.lng, y: p.lat, rotation: p.azimuth })),
-                    features: obstacles.map(o => ({ type: o.type, x: o.lng, y: o.lat, width: o.width, height: o.height }))
-                };
-                const res = await fetch('/simulate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                if (!res.ok) {
-                    const error = await res.json();
-                    throw new Error(error.detail || "Simulation failed on server");
-                }
-
-                const data = await res.json();
-                window.lastSimulationData = data;
-                document.getElementById('resEnergy').innerText = Math.round(data.results.annual_energy_kwh).toLocaleString();
-                document.getElementById('resNPV').innerHTML = `<span class="text-xs mr-1">GH₵</span>${Math.round(data.financials.npv || 0).toLocaleString()}`;
-
-                const payback = data.financials.payback_years;
-                document.getElementById('resPayback').innerText = (payback && payback > 0) ? `${payback.toFixed(1)} yr` : 'N/A';
-
-                document.getElementById('resultsArea').style.display = 'block';
-            } catch (e) { alert(`Simulation failed: ${e.message}`); }
-            finally { btn.innerHTML = '<i data-lucide="play" class="w-4 h-4"></i> RUN SIMULATION'; initIcons(); }
-        }
-
-        function renderCharts(data) {
-            Object.values(charts).forEach(c => c.destroy());
-            const commonOptions = {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: { x: { grid: { display: false } }, y: { beginAtZero: true } }
-            };
-            charts.loss = new Chart(document.getElementById('lossChart'), {
-                type: 'bar',
-                data: {
-                    labels: ['Ideal (100%)', 'Shading', 'Soiling', 'Heat', 'AC Loss', 'Final Yield'],
-                    datasets: [{
-                        label: 'Reduction %',
-                        data: [
-                            100,
-                            -data.results.losses.shading_percent,
-                            -data.results.losses.soiling_percent,
-                            -data.results.losses.degradation_percent,
-                            -3.0,
-                            (100 - data.results.losses.shading_percent - data.results.losses.soiling_percent - data.results.losses.degradation_percent - 3.0)
-                        ],
-                        backgroundColor: (ctx) => {
-                            const val = ctx.raw;
-                            if (ctx.index === 0) return '#f59e0b'; // Ideal
-                            if (ctx.index === 5) return '#10b981'; // Final
-                            return '#ef4444'; // Losses
-                        },
-                        borderRadius: 4
-                    }]
-                },
-                options: {
-                    ...commonOptions,
-                    plugins: { legend: { display: false } },
-                    scales: {
-                        y: {
-                            min: -100, max: 100,
-                            grid: { color: 'rgba(0,0,0,0.05)' }
-                        }
-                    }
-                }
-            });
-            charts.hourly = new Chart(document.getElementById('hourlyChart'), {
-                type: 'line',
-                data: {
-                    labels: Array.from({ length: 24 }, (_, i) => `${i}:00`),
-                    datasets: [{
-                        data: data.hourly_curve,
-                        borderColor: '#f59e0b',
-                        backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                        fill: true, tension: 0.4, pointRadius: 2, pointHoverRadius: 4,
-                        borderWidth: 3
-                    }]
-                },
-                options: {
-                    ...commonOptions,
-                    scales: {
-                        x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
-                        y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } }
-                    }
-                }
-            });
-            charts.monthly = new Chart(document.getElementById('monthlyChart'), {
-                type: 'bar',
-                data: {
-                    labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-                    datasets: [{
-                        data: data.results.monthly_energy || [120, 130, 140, 110, 90, 80, 75, 85, 100, 115, 125, 135],
-                        backgroundColor: '#f59e0b', borderRadius: 6
-                    }]
-                },
-                options: commonOptions
-            });
-            charts.roi = new Chart(document.getElementById('roiChart'), {
-                type: 'line',
-                data: {
-                    labels: Array.from({ length: 26 }, (_, i) => `Yr ${i}`),
-                    datasets: [{
-                        data: Array.from({ length: 26 }, (_, i) => {
-                            const savingsPerYear = data.results.annual_energy_kwh * data.config.electricity_rate;
-                            const totalCapex = data.config.capacity_kw * 15000; // Updated to GH₵ logic
-                            return (i * savingsPerYear) - totalCapex;
-                        }),
-                        borderColor: '#10b981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.05)',
-                        borderWidth: 3, pointRadius: 0, tension: 0.3, fill: true
-                    }]
-                },
-                options: {
-                    ...commonOptions,
-                    scales: {
-                        x: { ticks: { maxTicksLimit: 10 } },
-                        y: {
-                            ticks: {
-                                callback: (val) => 'GH₵ ' + (val / 1000).toFixed(0) + 'k'
-                            },
-                            grid: { color: 'rgba(0,0,0,0.05)' }
-                        }
-                    }
-                }
-            });
-        }
-
-        waitForGoogleMaps();
+            window.addEventListener('scroll', updateSun);
+            updateSun(); // Initial position
+        });
     </script>
 </body>
 

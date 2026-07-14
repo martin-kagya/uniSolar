@@ -64,9 +64,10 @@ def ingest_solcast(csv_path: str, lat: float, lon: float):
         weather_record.dni_ground = row['dni']
         
         # Improved/New Features
-        weather_record.pm25 = row['pm2.5']
-        weather_record.albedo = row['albedo']
-        weather_record.gti = row['gti']
+        weather_record.pm25 = row.get('pm2.5') or row.get('pm25')
+        weather_record.pm10 = row.get('pm10')
+        weather_record.albedo = row.get('albedo')
+        weather_record.gti = row.get('gti')
         
         # Solcast also provides DHI, Temp, etc. 
         # We can overwrite our "Satellite" data with this if we want Solcast to be the Input too?

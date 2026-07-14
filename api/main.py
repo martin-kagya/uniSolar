@@ -50,6 +50,39 @@ class Panel(BaseModel):
     y: float
     rotation: float = 0.0
 
+class CustomModule(BaseModel):
+    name: str
+    power_wp: float
+    width_m: float
+    length_m: float
+    # Performance
+    efficiency_pct: float | None = None        # Module efficiency (%)
+    performance_ratio: float | None = None     # System PR (%)
+    temp_coeff_pmax: float | None = None       # Temp coefficient of Pmax (%/°C)
+    temp_coeff_voc: float | None = None        # Temp coefficient of Voc (%/°C)
+    noct: float | None = None                  # Nominal Operating Cell Temp (°C)
+    # Electrical (STC)
+    voc: float | None = None                   # Open circuit voltage (V)
+    isc: float | None = None                   # Short circuit current (A)
+    vmp: float | None = None                   # Voltage at max power (V)
+    imp: float | None = None                   # Current at max power (A)
+    num_cells: int | None = None               # Number of cells
+    # Build / warranty
+    cell_technology: str | None = None         # e.g. Mono-PERC, Bifacial, HJT
+    warranty_years: int | None = None          # Product / power warranty (years)
+    # Battery
+    battery_brand: str | None = None
+    battery_capacity_kwh: float | None = None
+    battery_voltage: float | None = None       # Nominal battery voltage (V)
+    battery_chemistry: str | None = None       # e.g. LiFePO4, Lead-Acid
+    # Inverter
+    inverter_brand: str | None = None
+    inverter_kw: float | None = None
+    inverter_efficiency_pct: float | None = None  # Peak inverter efficiency (%)
+
+# In-memory store for user-added modules (per server session)
+custom_modules: list[dict] = []
+
 class RoofFeature(BaseModel):
     type: str # 'chimney', 'vent'
     x: float
@@ -71,6 +104,26 @@ class SimulationRequest(BaseModel):
     panels: list[Panel] = []
     features: list[RoofFeature] = []
     electricity_rate: float = 0.25
+    irradiance_bias: float = 1.0 # New tuning param
+    soiling_rate: float = 0.05   # New tuning param
+    system_cost_kw: float = 20000.0 # Standard GHS/kWp
+    om_cost_kw: float = 320.0       # Standard GHS/kWp
+    
+    # Advanced Physics Derates
+    mounting_type: str = 'open_rack' # or 'roof_mount'
+    wiring_loss: float = 0.02
+    lid_loss: float = 0.02
+    mismatch_loss: float = 0.02
+    inverter_efficiency: float = 0.96
+    
+    # Financial Dynamics
+    tariff_escalation: float = 0.03
+    om_escalation: float = 0.02
+    degradation_rate: float = 0.005
+
+    # ECG Tariff Settings
+    use_ecg_tariff: bool = True
+    customer_type: str = "residential"  # 'residential' or 'non_residential'
 
 class SizingRequest(BaseModel):
     latitude: float
@@ -78,10 +131,18 @@ class SizingRequest(BaseModel):
     monthly_consumption_kwh: float = None
     monthly_bill_ghs: float = None
     electricity_rate: float = 1.90
+    customer_type: str = "residential"  # 'residential' or 'non_residential'
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     return templates.TemplateResponse("index.html", {
+        "request": request, 
+        "google_maps_api_key": os.getenv("GOOGLE_MAPS_API_KEY", "")
+    })
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def read_dashboard(request: Request):
+    return templates.TemplateResponse("dashboard.html", {
         "request": request, 
         "google_maps_api_key": os.getenv("GOOGLE_MAPS_API_KEY", "")
     })
@@ -124,7 +185,11 @@ def run_simulation(req: SimulationRequest):
         df_l1 = weather_layer.predict(df)
         
         # 4. Layer 2: Environmantal Loss
-        df_l2 = env_layer.process(df_l1)
+        df_l2 = env_layer.process(df_l1, climate_zone=loc.climate_zone if loc else None)
+        
+        # Apply Soiling Rate Tuning
+        if req.soiling_rate != 0.05:
+            df_l2['soiling_loss'] *= (req.soiling_rate / 0.05)
         
         # Ensure DatetimeIndex for PVLib
         if 'timestamp' in df_l2.columns:
@@ -137,13 +202,23 @@ def run_simulation(req: SimulationRequest):
         solar_pos = location.get_solarposition(df_l2.index)
         
         # Calculate shading penalty from obstacles
-        panels_dict = [p.dict() for p in req.panels]
-        features_dict = [f.dict() for f in req.features]
-        shading_penalty = geo_layer.calculate_obstacle_shading(
+        from core.layers.geometry_model import GeometryLayer
+        geom_layer = GeometryLayer()
+        shading_series = geom_layer.calculate_obstacle_shading(
             solar_pos['zenith'], solar_pos['azimuth'], 
-            panels_dict, features_dict
+            [p.dict() for p in req.panels], 
+            [f.dict() for f in req.features]
         )
-        
+        shading_penalty = shading_series.mean()
+        # Apply Tuning Bias to Irradiance
+        if req.irradiance_bias != 1.0:
+            if 'ghi_corrected' in df_l2.columns:
+                df_l2['ghi_corrected'] *= req.irradiance_bias
+            if 'dni_corrected' in df_l2.columns:
+                df_l2['dni_corrected'] *= req.irradiance_bias
+            if 'dhi_satellite' in df_l2.columns:
+                df_l2['dhi_satellite'] *= req.irradiance_bias
+
         # 6. Layer 3: Physics
         result = physics_layer.simulate(
             df_l2, 
@@ -154,30 +229,97 @@ def run_simulation(req: SimulationRequest):
             req.azimuth,
             module_name=req.module_name,
             inverter_name=req.inverter_name,
-            shading_penalty=shading_penalty
+            shading_penalty=shading_penalty,
+            mounting_type=req.mounting_type,
+            wiring_loss=req.wiring_loss,
+            lid_loss=req.lid_loss,
+            mismatch_loss=req.mismatch_loss,
+            inverter_efficiency=req.inverter_efficiency
         )
         
-        # 6. Layer 4: Financials
+        # 7. Layer 4: Financials
         from core.layers.financial_model import FinancialLayer
-        fin_layer = FinancialLayer(electricity_tariff=req.electricity_rate)
+        fin_layer = FinancialLayer(
+            electricity_tariff=req.electricity_rate,
+            system_cost_per_kw=req.system_cost_kw,
+            annual_om_cost=req.om_cost_kw,
+            tariff_escalation_rate=req.tariff_escalation,
+            om_escalation_rate=req.om_escalation,
+            degradation_rate=req.degradation_rate,
+            use_ecg_tariff=req.use_ecg_tariff,
+            customer_type=req.customer_type,
+        )
         financials = fin_layer.calculate_roi(result['annual_energy_kwh'], req.capacity_kw)
         
-        # 7. Prepare Hourly Power Curve (Daily average or specific day)
-        # We'll send back the average daily curve for each month
+        # 8. Monte Carlo Layer (Probabilistic Yield Analysis)
+        # We perform a stochastic simulation (1,000 runs) to determine P50/P90 risk metrics.
+        # This accounts for meteorological variability and equipment uncertainty.
+        mc_iterations = 1000
+        # Uncertainty standard deviations for the West African context
+        irradiance_std = 0.05  # 5% inter-annual solar variation
+        soiling_std = 0.12     # 12% uncertainty in Harmattan deposition rates
+        hardware_std = 0.03    # 3% tolerance in manufacturer specs/wiring
+        
+        base_yield = result['annual_energy_kwh']
+        stochastic_yields = []
+        
+        for _ in range(mc_iterations):
+            # Sample from Normal distributions centered at 100%
+            s_irrad = np.random.normal(1.0, irradiance_std)
+            s_soil = np.random.normal(1.0, soiling_std)
+            s_hard = np.random.normal(1.0, hardware_std)
+            
+            # Stochastic Result = Base Yield scaled by combined uncertainties
+            s_yield = base_yield * s_irrad * s_soil * s_hard
+            stochastic_yields.append(s_yield)
+            
+        # Probabilistic Metrics
+        p50_yield = np.percentile(stochastic_yields, 50)
+        p90_yield = np.percentile(stochastic_yields, 10) # Value exceeded 90% of the time
+        
+        # Build Distribution Histogram for UI
+        hist_counts, hist_bins = np.histogram(stochastic_yields, bins=25)
+        prob_distribution = [
+            {"bin": float((hist_bins[i] + hist_bins[i+1]) / 2), "count": int(hist_counts[i])}
+            for i in range(len(hist_counts))
+        ]
+
+        # 9. Prepare Hourly Power Curve
         series = result['ac_series']
         hourly_curves = series.groupby(series.index.hour).mean().tolist()
-        
+
         # CLEANUP: Remove non-serializable Pandas objects
         if 'ac_series' in result:
              del result['ac_series']
 
-        return {
+        # Helper to recursively clean NaN/Inf values
+        def sanitize_json(obj):
+            if isinstance(obj, dict):
+                return {k: sanitize_json(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [sanitize_json(x) for x in obj]
+            elif isinstance(obj, float):
+                if not np.isfinite(obj): return 0.0
+                return obj
+            return obj
+
+        return sanitize_json({
             "status": "success",
             "config": req.dict(),
             "results": result,
             "financials": financials,
-            "hourly_curve": hourly_curves
-        }
+            "hourly_curve": hourly_curves,
+            "probabilistic_results": {
+                "p50_yield": p50_yield,
+                "p90_yield": p90_yield,
+                "distribution": prob_distribution
+            },
+            "environmental_metrics": {
+                "mean_pm25": float(df_l2['pm25'].mean()) if 'pm25' in df_l2.columns else 0.0,
+                "mean_pm10": float(df_l2['pm10'].mean()) if 'pm10' in df_l2.columns else 0.0,
+                "mean_cleaning_events_monthly": float(df_l2[df_l2['rain_mm'] > 0.5].shape[0] / 12) if 'rain_mm' in df_l2.columns else 0.0
+            }
+        })
 
     except Exception as e:
         import traceback
@@ -289,13 +431,125 @@ def export_csv(data: dict):
     )
 
 
+BUILTIN_MODULES = [
+    {
+        "id": "jinko_420_residential",
+        "name": "Jinko Tiger Pro 420W (Residential bundle)",
+        "power_wp": 420,
+        "width_m": 1.134,
+        "length_m": 1.722,
+        "efficiency_pct": 21.0,
+        "performance_ratio": 78.5,
+        "cell_technology": "Mono-PERC",
+        "battery_brand": "Pylontech US3000C",
+        "battery_capacity_kwh": 3.5,
+        "inverter_brand": "Fronius Primo",
+        "inverter_kw": 5.0
+    },
+    {
+        "id": "canadian_440_standard",
+        "name": "Canadian Solar HiKu 440W",
+        "power_wp": 440,
+        "width_m": 1.134,
+        "length_m": 1.762,
+        "efficiency_pct": 21.3,
+        "performance_ratio": 79.0,
+        "cell_technology": "Mono-PERC",
+        "battery_brand": "Tesla Powerwall 2",
+        "battery_capacity_kwh": 13.5,
+        "inverter_brand": "Tesla",
+        "inverter_kw": 5.0
+    },
+    {
+        "id": "longi_550_commercial",
+        "name": "Longi Hi-MO 5 550W (Commercial bundle)",
+        "power_wp": 550,
+        "width_m": 1.134,
+        "length_m": 2.278,
+        "efficiency_pct": 21.5,
+        "performance_ratio": 80.0,
+        "cell_technology": "Bifacial PERC",
+        "battery_brand": "Dyness",
+        "battery_capacity_kwh": 10.0,
+        "inverter_brand": "Huawei SUN2000",
+        "inverter_kw": 10.0
+    },
+    {
+        "id": "trina_700_industrial",
+        "name": "Trina Vertex N 700W (Industrial)",
+        "power_wp": 700,
+        "width_m": 1.303,
+        "length_m": 2.384,
+        "efficiency_pct": 22.5,
+        "performance_ratio": 82.0,
+        "cell_technology": "TOPCon Bifacial",
+        "battery_brand": "BYD Battery-Box Commercial",
+        "battery_capacity_kwh": 60.0,
+        "inverter_brand": "Sungrow",
+        "inverter_kw": 125.0
+    },
+    {
+        "id": "sunpower_400_maxeon",
+        "name": "SunPower Maxeon 3 400W (Premium)",
+        "power_wp": 400,
+        "width_m": 1.046,
+        "length_m": 1.690,
+        "efficiency_pct": 22.6,
+        "performance_ratio": 81.5,
+        "cell_technology": "IBC Core",
+        "battery_brand": "Enphase IQ Battery",
+        "battery_capacity_kwh": 10.5,
+        "inverter_brand": "Enphase Microinverters",
+        "inverter_kw": 3.8
+    },
+    {
+        "id": "qcells_qpeak_500",
+        "name": "Q.CELLS Q.PEAK DUO 500W",
+        "power_wp": 500,
+        "width_m": 1.134,
+        "length_m": 2.216,
+        "efficiency_pct": 21.2,
+        "performance_ratio": 79.5,
+        "cell_technology": "Mono-PERC Half-Cell",
+        "battery_brand": "Growatt ARK",
+        "battery_capacity_kwh": 7.6,
+        "inverter_brand": "Growatt MIN",
+        "inverter_kw": 6.0
+    }
+]
+
 @app.get("/modules")
 def get_modules():
-    return [
-        {"id": "jinko_420", "name": "Jinko 420W", "power_wp": 420, "width_m": 1.134, "length_m": 1.722},
-        {"id": "canadian_440", "name": "Canadian 440W", "power_wp": 440, "width_m": 1.134, "length_m": 1.762},
-        {"id": "trina_700", "name": "Trina 700W", "power_wp": 700, "width_m": 1.303, "length_m": 2.384}
+    return BUILTIN_MODULES + custom_modules
+
+@app.post("/modules")
+def add_module(module: CustomModule):
+    import re, time
+    # Generate a stable id from name + timestamp
+    slug = re.sub(r'[^a-z0-9]+', '_', module.name.lower()).strip('_')
+    module_id = f"custom_{slug}_{int(time.time())}"
+    entry = {
+        "id": module_id,
+        "name": module.name,
+        "power_wp": module.power_wp,
+        "width_m": module.width_m,
+        "length_m": module.length_m,
+        "custom": True,
+    }
+    # Store all optional fields compactly
+    optional_fields = [
+        "efficiency_pct", "performance_ratio", "temp_coeff_pmax", "temp_coeff_voc", "noct",
+        "voc", "isc", "vmp", "imp", "num_cells",
+        "cell_technology", "warranty_years",
+        "battery_brand", "battery_capacity_kwh", "battery_voltage", "battery_chemistry",
+        "inverter_brand", "inverter_kw", "inverter_efficiency_pct",
     ]
+    for field in optional_fields:
+        val = getattr(module, field, None)
+        if val is not None:
+            entry[field] = val
+    custom_modules.append(entry)
+    return entry
 
 
 @app.get("/inverters")
@@ -303,27 +557,44 @@ def get_inverters():
     return physics_layer.get_representative_inverters()
 
 
+@app.get("/ecg-tariff-info")
+def ecg_tariff_info():
+    """Returns a summary of ECG May 2025 effective tariff rates at common consumption levels."""
+    from core.layers.ecg_tariff import ECGTariff
+    ecg = ECGTariff()
+    return ecg.get_tariff_summary()
+
+
 @app.post("/size-system")
 def size_system(req: SizingRequest):
+    from core.layers.ecg_tariff import ECGTariff
+    ecg = ECGTariff()
+    customer_type = getattr(req, 'customer_type', 'residential')
+
     # Determine Monthly kWh
     monthly_kwh = req.monthly_consumption_kwh
     if monthly_kwh is None and req.monthly_bill_ghs is not None:
-        monthly_kwh = req.monthly_bill_ghs / req.electricity_rate
-    
+        # Use ECG tariff reverse-lookup for accurate kWh from bill (tiered billing)
+        monthly_kwh = ecg.get_kwh_from_bill(req.monthly_bill_ghs, customer_type)
+
     if not monthly_kwh:
         raise HTTPException(status_code=400, detail="Must provide consumption or bill")
 
     daily_kwh = monthly_kwh / 30.0
-    
+
     # Scientific Sizing: Pdc = E_daily / (PSH * PR)
-    psh = 4.8 
-    pr = 0.78 # Conservative PR for Ghana
-    
+    psh = 4.8
+    pr = 0.78  # Conservative PR for Ghana
+
     required_kwp = daily_kwh / (psh * pr)
-    
-    # Return recommendations for common panel sizes (using hardcoded db for now)
+
+    # Effective tariff for the user's consumption level
+    effective_rate = ecg.get_effective_rate(monthly_kwh, customer_type)
+    monthly_bill = ecg.get_monthly_bill(monthly_kwh, customer_type)
+
+    # Return recommendations for common panel sizes
     panel_types = get_modules()
-    
+
     recommendations = []
     for p in panel_types:
         count = int(np.ceil((required_kwp * 1000) / p['power_wp']))
@@ -332,16 +603,22 @@ def size_system(req: SizingRequest):
             "count": count,
             "total_kwp": (count * p['power_wp']) / 1000.0
         })
-        
+
     return {
         "status": "success",
-        "monthly_kwh": monthly_kwh,
-        "daily_kwh": daily_kwh,
+        "monthly_kwh": round(monthly_kwh, 2),
+        "daily_kwh": round(daily_kwh, 3),
         "required_kwp": round(required_kwp, 2),
         "psh_used": psh,
         "pr_used": pr,
         "recommendations": recommendations,
-        "suggested_inverter_kw": round(required_kwp * 1.1, 1) # 1.1 DC/AC ratio
+        "suggested_inverter_kw": round(required_kwp * 1.1, 1),
+        "tariff_info": {
+            "customer_type": customer_type,
+            "monthly_bill_ghs": round(monthly_bill, 2),
+            "effective_rate_ghs_per_kwh": round(effective_rate, 4),
+            "tariff_source": "ECG May 2025 Reckoner",
+        }
     }
 
 # Mount static files (HTML=False so we serve index via template)

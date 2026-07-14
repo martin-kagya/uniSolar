@@ -25,9 +25,25 @@ class PhysicsLayer:
             except Exception as e:
                 print(f"Warning: Could not load PVLib/SAM databases: {e}")
 
+    def get_representative_inverters(self):
+        """
+        Returns a curated list of common inverters for the UI.
+        Real database has 3000+ entries, so we select a few reliable ones.
+        """
+        return [
+            {"id": "Generic", "name": "Generic Consistent (98%)", "p_aco": 0},
+            {"id": "Huawei_Technologies_Co___Ltd___SUN2000_100KTL_USH0__800V_", "name": "Huawei SUN2000 100kW", "p_aco": 100000},
+            {"id": "SMA_America__STP_62_US_41__480V_", "name": "SMA Sunny Tripower 62kW", "p_aco": 62000},
+            {"id": "Fronius_USA__Symo_Advanced_24_0_3_480__480V_", "name": "Fronius Symo Advanced 24kW", "p_aco": 24000},
+            {"id": "Sungrow_Power_Supply_Co___Ltd___SG110CX__600V_", "name": "Sungrow SG110CX 110kW", "p_aco": 110000},
+            {"id": "Enphase_Energy_Inc___IQ8M_72_2_US__240V_", "name": "Enphase IQ8M Micro (325W)", "p_aco": 325}
+        ]
+
     def simulate(self, weather_df, lat, lon, system_capacity_kw=5.0, tilt=10, azimuth=180, 
                  module_name=None, inverter_name=None, modules_per_string=10, gcr=None,
-                 shading_penalty=None):
+                 shading_penalty=None, mounting_type='open_rack', 
+                 wiring_loss=0.02, lid_loss=0.02, mismatch_loss=0.02,
+                 inverter_efficiency=0.96):
         """
         Runs the PVLib simulation chain.
         """
@@ -41,12 +57,6 @@ class PhysicsLayer:
         sim_weather['temp_air'] = weather_df['temp_air'].fillna(25)
         sim_weather['wind_speed'] = weather_df['wind_speed'].fillna(2)
         
-        print(f"DEBUG: sim_weather Index: {sim_weather.index}")
-        print(f"DEBUG: sim_weather Cols: {sim_weather.columns.tolist()}")
-        print(f"DEBUG: sim_weather Shape: {sim_weather.shape}")
-        if not sim_weather.empty:
-             print(f"DEBUG: sim_weather First Row:\n{sim_weather.iloc[0]}")
-        
         # 2. Define System
         location = Location(latitude=lat, longitude=lon)
         mount = FixedMount(surface_tilt=tilt, surface_azimuth=azimuth)
@@ -54,7 +64,13 @@ class PhysicsLayer:
         # Determine Module and Inverter parameters
         module_params = None
         inverter_params = None
-        temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_glass']
+        
+        # Temperature Model Selection
+        if mounting_type == 'roof_mount':
+            # SAPM parameters for "Close Mount" (Insulated roof) - runs hotter
+            temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['close_mount_glass_glass']
+        else:
+            temp_params = TEMPERATURE_MODEL_PARAMETERS['sapm']['open_rack_glass_glass']
         
         if module_name:
             self._load_databases()
@@ -214,10 +230,12 @@ class PhysicsLayer:
              degradation_factor = weather_df['degradation_factor'] if 'degradation_factor' in weather_df.columns else 1.0
              loss_factor = (1.0 - soiling_factor) * degradation_factor
              
-        # Final AC Power = Raw AC * Combined Loss Factor
-        # Also apply a Global System Efficiency factor (0.88) to align with PR 0.80-0.85
-        # This accounts for cabling, mismatch, and small shading not in model.
-        ac_corrected = ac_raw * loss_factor * 0.88
+        # 5. Physics Derate Factors (Discrete)
+        # lid_loss, wiring_loss, mismatch_loss
+        physics_derate = (1.0 - lid_loss) * (1.0 - wiring_loss) * (1.0 - mismatch_loss)
+        
+        # Final AC Power = Raw AC * Environmental Loss * Physics Derates
+        ac_corrected = ac_raw * loss_factor * physics_derate
         
         if shading_penalty is not None:
              ac_corrected = ac_corrected * (1.0 - shading_penalty)
@@ -230,7 +248,7 @@ class PhysicsLayer:
         annual_energy_kwh = ac_corrected.sum() / 1000.0
         
         # Calculate Loss Percentages (Approximate)
-        # Total Ideal = Energy if no soiling, no degradation, no shading
+        # Total Ideal = Energy if no soiling, no degradation, no shading, no wiring/lid/mismatch
         # We can approximate this by looking at ac_raw vs ac_corrected
         
         # Soiling Loss
@@ -243,8 +261,11 @@ class PhysicsLayer:
         shad_loss_val = 0
         if shading_penalty is not None:
              shad_loss_val = (ac_raw * shading_penalty).sum() / 1000.0
+             
+        # Physics Loss (Wiring, LID, Mismatch)
+        physics_loss_val = (ac_raw * (1.0 - physics_derate)).sum() / 1000.0
         
-        total_potential = annual_energy_kwh + soiling_loss_val + deg_loss_val + shad_loss_val
+        total_potential = annual_energy_kwh + soiling_loss_val + deg_loss_val + shad_loss_val + physics_loss_val
         
         return {
             "annual_energy_kwh": annual_energy_kwh,
@@ -255,6 +276,7 @@ class PhysicsLayer:
             "losses": {
                 "soiling_percent": (soiling_loss_val / total_potential * 100) if total_potential > 0 else 0,
                 "shading_percent": (shad_loss_val / total_potential * 100) if total_potential > 0 else 0,
-                "degradation_percent": (deg_loss_val / total_potential * 100) if total_potential > 0 else 0
+                "degradation_percent": (deg_loss_val / total_potential * 100) if total_potential > 0 else 0,
+                "physics_derate_percent": (physics_loss_val / total_potential * 100) if total_potential > 0 else 0
             }
         }

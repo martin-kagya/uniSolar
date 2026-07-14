@@ -25,3 +25,20 @@ __pycache__/
 *.csv
 *.tif
 *.pkl
+*.grib
+*.grib.*
+
+# Reports
+reports/figs/
+reports/plots/
+reports/ppt_visuals/
+reports/presentation_visuals/
+
+# Design
+*.pen
+
+# Media
+*.mp4
+*.jpg
+*.png
+images/

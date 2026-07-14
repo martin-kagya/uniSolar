@@ -1,0 +1,86 @@
+{
+  "metadata": {
+    "timestamp": "2026-06-27T13:37:02.396602",
+    "hardware": "MacBook Air M2 (Mac14,2)",
+    "ram_gb": 16,
+    "cpu_cores": 8,
+    "country": "Ghana",
+    "carbon_intensity_g_per_kwh": 540
+  },
+  "a_inference": {
+    "n_records": 10000,
+    "total_g_co2": 0.000438,
+    "per_request_g_co2": 4.38e-08,
+    "energy_kwh": 9.1e-07
+  },
+  "b_training": {
+    "xgboost_5fold": {
+      "rmse": 141.49,
+      "elapsed_s": 62.1
+    },
+    "rf_5fold": {
+      "rmse": 140.51,
+      "elapsed_s": 316.0
+    },
+    "ridge_5fold": {
+      "rmse": 141.14,
+      "elapsed_s": 4.3
+    },
+    "stacking_full": {
+      "rmse": 136.84,
+      "elapsed_s": 680.9
+    },
+    "final_retrain": {
+      "elapsed_s": 147.8,
+      "models": [
+        "xgboost",
+        "rf",
+        "ridge"
+      ]
+    },
+    "total": {
+      "co2_kg": 0.001273,
+      "energy_kwh": 0.00263,
+      "duration_s": 1211
+    }
+  },
+  "c_dev_serving": {
+    "dev_running": false,
+    "estimated_uptime_h": 48,
+    "avg_power_w": 12,
+    "energy_kwh": 0.576,
+    "co2_kg": 0.31104,
+    "co2_g": 311.04,
+    "note": "Estimated from TDP + typical dev load. Run `codecarbon monitor -- python api/main.py` for precise measurement."
+  },
+  "d_retrospective": {
+    "hpt_trials_30": {
+      "trials": 30,
+      "total_s": 1588.6
+    },
+    "architecture_deep_dive": {
+      "configs": 15,
+      "estimated_s": 600
+    },
+    "early_lstm_baseline": {
+      "estimated_s": 200
+    },
+    "total_elapsed_s": 2388.6,
+    "energy_kwh": 0.009953,
+    "co2_kg": 0.005374,
+    "co2_g": 5.37,
+    "note": "Estimated from known timings \u00d7 Apple M2 TDP (15W). Uncertainty \u00b130%."
+  },
+  "e_production": {
+    "scenario": "AWS t3.medium, us-east-1, 24/7 for 30 days",
+    "hours_per_month": 730,
+    "monthly_requests": 300000,
+    "server_power_w": 26.8,
+    "server_energy_kwh": 19.564,
+    "server_co2_kg": 7.8256,
+    "inference_co2_kg": 0.0003,
+    "total_co2_kg": 7.8259,
+    "total_co2_g": 7825.9,
+    "carbon_intensity_g_per_kwh": 400
+  }
+}

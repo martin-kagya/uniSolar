@@ -44,6 +44,7 @@ class WeatherData(Base):
     
     # Solcast Specific Features
     pm25 = Column(Float, nullable=True) # Particulate Matter 2.5
+    pm10 = Column(Float, nullable=True) # Particulate Matter 10
     albedo = Column(Float, nullable=True) # Surface Albedo
     
     # Ground Truth (The "Target" for ML - sparse)

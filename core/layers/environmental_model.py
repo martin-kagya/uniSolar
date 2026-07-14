@@ -51,7 +51,7 @@ class EnvironmentalLayer:
         self._rain_warning_logged = False
         self._rain_scaling_factor = 1.0  # Detected automatically in calculate_soiling_losses
         
-    def _calculate_dynamic_soiling_rate(self, aod_value, pm25_value, relative_humidity, month):
+    def _calculate_dynamic_soiling_rate(self, aod_value, pm25_value, pm10_value, relative_humidity, month, climate_zone=None):
         """
         Calculates daily soiling rate using a Mass Deposition approach.
         
@@ -61,44 +61,61 @@ class EnvironmentalLayer:
         Vd: Deposition velocity (m/s)
         
         We approximate the daily fractional loss (DR) as:
-        DR = (PM2.5 * k_mass) * AdhesionFactor(RH)
+        DR = ((PM2.5 * k_pm25) + (PM10 * k_pm10)) * AdhesionFactor(RH) * TerrainMultiplier
         
-        Constants:
-        - k_pm25: ~0.00004 (Derived from West Africa Harmattan studies where 100ug/m3 ~ 0.4% loss/day)
-        - Vd_aerosol: 0.0001 m/s (approx 0.01 cm/s for fine particulates)
+        Climate Zones: 0 (Coastal), 1 (Forest), 2 (Savanna)
         """
-        # Base physical rate based on PM2.5 (Ug/m3)
-        # If PM2.5 is unavailable, we use AOD as a proxy (1.0 AOD ~ 150 Ug/m3 in Sahel)
         pm25 = 0.0
+        pm10 = 0.0
+        
         if pm25_value is not None and not pd.isna(pm25_value):
             pm25 = pm25_value
-        elif aod_value is not None and not pd.isna(aod_value):
-            pm25 = aod_value * 150.0  # Common scaling for Sahara dust
-        else:
-            # Fallback to seasonal defaults if no aerosol data
-            is_harmattan = month in [12, 1, 2]
-            pm25 = 80.0 if is_harmattan else 15.0
+        if pm10_value is not None and not pd.isna(pm10_value):
+            pm10 = pm10_value
             
-        # 1. Mass Deposition Correlation (Scientific)
-        # Ratio based on studies in Nigeria/Ghana: 0.0035% per 1 ug/m3 of PM2.5
-        # Ref: "Impact of dust on PV performance in West Africa" (Akuffo et al.)
-        k_soiling = 0.000035 
-        base_rate = pm25 * k_soiling
+        # Fallback to AOD or Terrain-Specific defaults if no PM data
+        if pm25 == 0.0 and pm10 == 0.0:
+            if aod_value is not None and not pd.isna(aod_value):
+                # Total PM approx scaling
+                total_pm = aod_value * 150.0
+                # Savanna (Zone 2) has higher coarse fraction
+                if climate_zone == 2:
+                    pm25, pm10 = total_pm * 0.25, total_pm * 0.75
+                else:
+                    pm25, pm10 = total_pm * 0.4, total_pm * 0.6
+            else:
+                # Default seasonal fallbacks based on Terrain (West Africa Profile)
+                is_harmattan = month in [12, 1, 2]
+                if climate_zone == 2: # Savanna (Sahara Influence)
+                    pm25 = 120.0 if is_harmattan else 25.0
+                    pm10 = 350.0 if is_harmattan else 50.0
+                elif climate_zone == 0: # Coastal (Maritime Aerosols)
+                    pm25 = 40.0 if is_harmattan else 10.0
+                    pm10 = 80.0 if is_harmattan else 20.0
+                else: # Forest / Default
+                    pm25 = 60.0 if is_harmattan else 15.0
+                    pm10 = 120.0 if is_harmattan else 30.0
+            
+        # 1. Mass Deposition Correlation
+        k_pm25 = 0.000035 
+        k_pm10 = 0.000025 
+        base_rate = (pm25 * k_pm25) + (pm10 * k_pm10)
         
-        # 2. Humidity Adhesion Factor
-        # Higher RH causes 'caking' or 'cementation' (hygroscopic growth)
-        # RH < 40%: factor 1.0
-        # RH > 80%: factor 1.5 (High adhesion)
+        # 2. Terrain & Adhesion Logic
+        # Coastal systems (Zone 0) experience 'salt-crusting' which increases baseline loss
+        terrain_multiplier = 1.0
+        if climate_zone == 0:
+            terrain_multiplier = 1.25 # +25% baseline due to salt spray adhesion
+            
         rh = relative_humidity if relative_humidity is not None and not pd.isna(relative_humidity) else 60.0
         adhesion_factor = 1.0 + (max(0, rh - 40.0) / 100.0) * 1.25 # Linear ramp
-        adhesion_factor = min(adhesion_factor, 1.75)  # Cap at +75% boost
+        adhesion_factor = min(adhesion_factor, 1.75) 
         
-        daily_rate = base_rate * adhesion_factor
+        daily_rate = base_rate * adhesion_factor * terrain_multiplier
         
-        # Ensure we don't drop below a minimum maintenance "clean" rate (0.01% / day)
         return max(daily_rate, 0.0001)
 
-    def calculate_soiling_losses(self, df):
+    def calculate_soiling_losses(self, df, climate_zone=None):
         """
         Calculates hourly soiling factors based on actual rainfall and aerosol data.
         """
@@ -112,6 +129,7 @@ class EnvironmentalLayer:
         has_rain_data = 'rain_mm' in df_sorted.columns
         has_aod_data = 'aod_550' in df_sorted.columns
         has_pm25_data = 'pm25' in df_sorted.columns
+        has_pm10_data = 'pm10' in df_sorted.columns
         has_rh_data = 'relative_humidity' in df_sorted.columns
         
         if not has_rain_data and not self._rain_warning_logged:
@@ -134,10 +152,11 @@ class EnvironmentalLayer:
             # 1. Scientific Dynamic Soiling
             aod_value = row.get('aod_550') if has_aod_data else None
             pm25_value = row.get('pm25') if has_pm25_data else None
+            pm10_value = row.get('pm10') if has_pm10_data else None
             rh_value = row.get('relative_humidity') if has_rh_data else None
             
             daily_rate = self._calculate_dynamic_soiling_rate(
-                aod_value, pm25_value, rh_value, month
+                aod_value, pm25_value, pm10_value, rh_value, month, climate_zone=climate_zone
             )
             
             # Hourly rate
@@ -187,21 +206,18 @@ class EnvironmentalLayer:
         years_elapsed = (timestamps - start_date).dt.total_seconds() / (365.25 * 24 * 3600)
         
         # Degradation factor (compound loss)
-        # Year 0 (Start): 1.0
-        # Year 1: (1 - 0.005)^1 = 0.995
-        # Year 2: (1 - 0.005)^2 = 0.990025
         degradation_factor = (1.0 - self.degradation_rate) ** years_elapsed
         return degradation_factor
 
-    def process(self, df, system_start_date=None):
+    def process(self, df, system_start_date=None, climate_zone=None):
         """
         Applies Environmental Losses to the DataFrame.
         Adds 'soiling_loss' and 'degradation_factor'.
         """
         df_out = df.copy()
         
-        # 1. Soiling
-        df_out['soiling_loss'] = self.calculate_soiling_losses(df_out)
+        # 1. Soiling (Pass climate_zone if available)
+        df_out['soiling_loss'] = self.calculate_soiling_losses(df_out, climate_zone=climate_zone)
         
         # 2. Degradation
         df_out['degradation_factor'] = self.calculate_degradation_factor(df_out['timestamp'], system_start_date)
