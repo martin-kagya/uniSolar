@@ -18,6 +18,8 @@
 | Energy consumed | 0.00000091 kWh |
 
 ### B. Training (5-fold GroupKFold CV on 64,968 ZINDI records, 38 stations)
+> **Note**: These are historical figures from the V1 model (Jun 2026). Current production
+> uses V3 training: 38,166 daytime records, 21 stations, LSTM_BASE model (RMSE 90.98 W/m²).
 | Component | RMSE (W/m²) | Duration (s) |
 |---|---|---|
 | XGBoost 5-fold | 141.49 | 62.1 |

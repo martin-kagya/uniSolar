@@ -8,122 +8,152 @@ solar resource assessment in data-sparse regions.
 
 ## Table of Contents
 
-1. [Objective](#objective)
-2. [Data](#data)
-3. [Phase 1 — Pre-LSTM: Stacking Ensemble](#phase-1--pre-lstm-stacking-ensemble)
-4. [Phase 2 — LSTM: Temporal Deep Learning](#phase-2--lstm-temporal-deep-learning)
-5. [Architecture & Pipeline](#architecture--pipeline)
-6. [Benchmarks](#benchmarks)
-7. [Key Decisions & Findings](#key-decisions--findings)
-8. [Scripts & Usage](#scripts--usage)
-9. [Data Flow](#data-flow)
-10. [Way Forward](#way-forward)
+1. [Executive Summary](#executive-summary)
+2. [The Problem](#the-problem)
+3. [Architecture Overview](#architecture-overview)
+4. [Production Pipeline](#production-pipeline)
+5. [ML Model Selection](#ml-model-selection)
+6. [Feature Engineering](#feature-engineering)
+7. [Benchmarks](#benchmarks)
+8. [Key Design Decisions](#key-design-decisions)
+9. [Data Sources](#data-sources)
+10. [System Architecture](#system-architecture)
+11. [Scripts & Usage](#scripts--usage)
+12. [Way Forward](#way-forward)
 
 ---
 
-## Objective
+## Executive Summary
 
-Correct the residual positive bias in NASA POWER satellite GHI for West African sites.
-NASA POWER systematically under-reports irradiance by 30-50% in this region due to
-aerosol loading (Saharan dust, biomass burning) and complex coastal atmospheric dynamics.
+UniSolar is a production-grade solar resource assessment platform that corrects systematic biases in satellite-derived irradiance data for West African sites. The system combines machine learning bias correction with physics-based energy modeling to deliver lender-ready financial projections for utility-scale solar installations.
 
-The core problem is **spatial generalization**: a model trained on 38 ground stations
-must correct irradiance accurately at **unseen locations** across the Sahel. This rules
-out per-station calibration and forces the model to learn physically meaningful,
-transferable corrections.
-
----
-
-## Data
-
-### Training Set (64,968 records, 38 groups)
-
-| Source | Records | Groups | Description |
-|---|---|---|---|
-| ZINDI Challenge | 65,382 | 38 stations | West African solar monitoring network |
-| DB NASA (Ghana) | 78,838 | 3 locations | Ghana-specific NASA POWER + ground truth |
-
-### Excluded Stations
-TA00338, TA00295, TA00064, TA00219 — identified as faulty.
-
-### Satellite Data
-- **NASA POWER** (primary): 3-hourly GHI, DNI, DHI, temperature, humidity, wind speed,
-  cloud amount, AOD at 550nm (`power_AOD_55` — sourced from MERRA-2 reanalysis)
-- **Spatial resolution**: 0.5° × 0.625° (~50-60 km at equator)
-- **Temporal range**: 2017-2019 (ZINDI), 2014-2023 (DB Ghana)
-
-### Atmospheric Data
-- **PM2.5**: CAMS EAC4 reanalysis (3-hourly, ~80 km grid, 2003-present)
-- **AOD at 550nm**: NASA POWER parameter `power_AOD_55` (already MERRA-2 derived)
-
-### Ground Truth
-- ZINDI Challenge pyranometer measurements
-- Ghana DB station measurements
-- **Temporal footprint mismatch**: Ground truth is instantaneous; NASA POWER is a
-  3-hour average. Future work should average GT ±1.5h around each POWER timestamp.
+**Key Metrics:**
+- **23 validated ground stations** across West Africa (Ghana, Mali, Benin, Nigeria)
+- **50,218 daytime training records** from NASA POWER satellite + ground truth
+- **RMSE improvement**: 110.2 → 91.0 W/m² (17.4% reduction) with LSTM_BASE
+- **Production model**: LSTM_BASE (bidirectional, 32 hidden, 2 layers) + RF fallback
+- **Architecture**: 6-layer pipeline with real-time NASA POWER data integration
 
 ---
 
-## Phase 1 — Pre-LSTM: Stacking Ensemble
+## The Problem
 
-### The Station Bias Bug
+NASA POWER satellite GHI systematically overestimates irradiance by **~12%** in West Africa due to:
+- **Aerosol loading**: Saharan dust (Harmattan) and biomass burning
+- **Coastal atmospheric dynamics**: Complex marine boundary layer effects
+- **Spatial resolution**: 0.5° × 0.625° grid (~50-60 km at equator) misses local variability
 
-**Root cause**: In GroupKFold cross-validation, validation groups correspond to unseen
-stations with no known `station_bias`. The old code left `station_bias=NaN` in
-validation folds (or filled with 0 via `fillna(0.0)`). Tree-based models
-(XGBoost, RandomForest) used the real bias values in training data to learn
-**station-specific splits** — splits that produce non-generalizing trees for unseen
-stations.
+This bias makes satellite data unreliable for solar project financing without ground-truth calibration. The core challenge is **spatial generalization**: a model trained on 23 stations must correct irradiance accurately at **unseen locations** across the Sahel.
 
-**Impact**: When `fillna(0.0)` was applied (required because Ridge Regression's
-solver cannot tolerate NaN), the CV results inflated dramatically:
-- XGBoost jumped from ~140 to ~148 W/m²
-- RandomForest jumped from ~139 to ~147 W/m²
+---
 
-The splits had memorised station identity through bias patterns. Validation (now
-receiving 0.0 instead of NaN) was being evaluated against splits trained for
-different bias values, producing worse results than random.
+## Architecture Overview
 
-**Fix**: Zero `station_bias` for **both** training and validation during k-fold.
-No station-specific information leaks. True per-station bias is only computed and
-applied during final full-data retraining (for the `station_calibration.json`
-post-hoc adjustment).
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        UniSolar Platform                            │
+├─────────────────────────────────────────────────────────────────────┤
+│  Frontend (React + Vite)    │    Backend (FastAPI + Python)         │
+│  ├── MapViewport            │    ├── api/main.py (REST API)         │
+│  ├── Sidebar (Controls)     │    ├── core/layers/                   │
+│  ├── ResultsPanel           │    │   ├── weather_model.py (ML)      │
+│  ├── ReportModal            │    │   ├── environmental_model.py     │
+│  └── SizingHubModal         │    │   ├── physics_model.py           │
+│                             │    │   ├── geometry_model.py          │
+│                             │    │   ├── financial_model.py         │
+│                             │    │   ├── sustainability_model.py    │
+│                             │    │   └── ecg_tariff.py              │
+│                             │    ├── core/services/gis.py           │
+│                             │    └── core/database.py               │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-### Target Selection
+---
 
-Two targets were compared:
+## Production Pipeline
 
-| Target | Formula | Problem |
-|---|---|---|
-| kt (clearness index) | `kt = GHI / clear_sky_ghi` | `error = clear_sky_ghi × error_in_kt` — amplifies cloudy-day errors because clear_sky_ghi ≫ satellite GHI on cloudy days |
-| Ratio | `ratio = GHI_ground / GHI_satellite` | `error = GHI_satellite × error_in_ratio` — error scales with the signal itself, which is already low on cloudy days |
+### 6-Layer Architecture
 
-**Decision**: Ratio target, bounded [0.0, 3.0]. Both have similar k-fold RMSE but
-ratio is physically better-behaved.
+```
+[Raw NASA POWER] → Layer 1: Weather Correction (ML)
+                          ↓
+                 36 engineered features
+                          ↓
+                   Ratio Predictor (LSTM_BASE or RF)
+                          ↓
+                 ghi_corrected = satellite × predicted_ratio
+                          ↓
+                 Layer 2: Environmental Losses
+                 (Soiling, Degradation, Rain Cleaning)
+                          ↓
+                 Layer 0: Spatial Geometry
+                 (Obstacle Shading, Row-to-Row)
+                          ↓
+                 Layer 3: Physics Engine (PVLib)
+                 (Module specs, Inverter, Temperature)
+                          ↓
+                 Layer 4: Financial Modeling
+                 (NPV, IRR, LCOE, Payback)
+                          ↓
+                 Layer 5: Sustainability Reporting
+                 (CO2 Avoidance, Tree Equivalents)
+                          ↓
+                 [Lender-Ready Report]
+```
 
-### Feature Engineering
+### Layer Descriptions
 
-#### AOD at 550nm
-Added `aod_550` from NASA POWER's `power_AOD_55` parameter. This is already
-MERRA-2 derived (NASA POWER sources its aerosol fields from the MERRA-2
-reanalysis). Fallback value of 0.15 when missing.
+| Layer | Module | Purpose | Key Technology |
+|-------|--------|---------|----------------|
+| **Layer 1** | `weather_model.py` | ML bias correction of satellite irradiance | LSTM/RF, 36 features, ratio target |
+| **Layer 2** | `environmental_model.py` | Soiling (Kimber model), degradation, rain cleaning | AOD/PM2.5 modulated, manufacturer presets |
+| **Layer 0** | `geometry_model.py` | Obstacle shading, row-to-row inter-row shading | PVLib infinite row model |
+| **Layer 3** | `physics_model.py` | Deterministic energy yield simulation | PVLib ModelChain, Sandia modules |
+| **Layer 4** | `financial_model.py` | NPV, IRR, LCOE, payback, lifetime savings | ECG May 2025 tariff reckoner |
+| **Layer 5** | `sustainability_model.py` | CO2 avoidance, tree equivalents | Ghana grid emission factor (0.35 kg/kWh) |
 
-Contributed **+1.8 W/m²** improvement on held-out benchmark.
+---
 
-#### Cloud Variability Features (4 new)
-Derived from the existing clearness_index to capture temporal cloud dynamics:
+## ML Model Selection
 
-| Feature | Formula | What it captures |
-|---|---|---|
-| `ghi_satellite_lag2` | shift(2) of GHI | GHI at t-6h — medium-term cloud memory |
-| `clearness_index_lag1` | shift(1) of clearness_index | Cloud attenuation at t-3h — short-term memory |
-| `clearness_index_std_3h` | rolling(3).std() | Broken vs uniform cloud cover over 9h |
-| `clearness_index_delta` | diff(1) | Rate of change — clearing vs clouding over |
+### Current Best: LSTM_BASE (Bidirectional LSTM)
 
-**Impact**: Stacking 138.75 → 138.37 (−0.38), Ridge 142.95 → 141.30 (−1.65).
-Ridge benefits most because it can't learn non-linear interactions natively.
+The best-performing model is a bidirectional LSTM that captures temporal patterns in satellite irradiance sequences:
 
-#### Full Feature Set (36 features)
+| Component | Value |
+|-----------|-------|
+| Architecture | Bidirectional LSTM + FC head |
+| Hidden dim | 32 × 2 (bidirectional) |
+| Layers | 2 |
+| Sequence length | 4 timesteps |
+| Dropout | 0.2 |
+| Output | Sigmoid × 3.0 (bounded ratio) |
+| Training | AdamW, lr=3e-4, early stopping (patience=6) |
+| Ensemble | 2-seed average |
+
+### Model Comparison
+
+| Model | RMSE (W/m²) | Size | Inference | Notes |
+|-------|-------------|------|-----------|-------|
+| **LSTM_BASE** | **90.98 ± 5.22** | 168 KB | ~5ms | **Best performer** |
+| LSTM_ATTN | 91.33 ± 5.37 | 234 KB | ~6ms | Attention variant |
+| RF | 93.48 ± 14.79 | 240 MB | ~50ms | Stable, large |
+| XGBoost | 94.06 ± 14.71 | 20 MB | ~20ms | Fast inference |
+| Ridge | 100.08 ± 12.16 | 3 KB | <1ms | Linear baseline |
+
+### Why Not Stacking?
+
+Stacking (XGBoost + RF + Ridge + LSTM → meta-model) was tested but not deployed:
+- Marginal improvement (~1-2 W/m²) over single LSTM
+- 6× more model files to maintain
+- ~5× slower inference (multiple model loads)
+- LSTM alone captures enough signal
+
+---
+
+## Feature Engineering
+
+### 36-Feature Set
 
 ```
 Satellite:       ghi_satellite, dni_satellite, dhi_satellite
@@ -138,274 +168,259 @@ Categorical:     cz_0.0, cz_1.0, cz_2.0 (climate zone one-hot)
 Station:         station_bias (zeroed during k-fold, real during final training)
 ```
 
-### Model Selection
+### LSTM Feature Subset (21 features)
 
-#### LightGBM Dropped
-LightGBM predictions were **99.5% correlated** with XGBoost on identical features.
-Stacking requires diversity — adding a near-identical model provides no lift
-while adding complexity. Replaced by Ridge.
-
-#### UniSolar Stacking Ensemble
-```
-Base models:  XGBoost + RandomForest + Ridge(StandardScaler + alpha=10.0) + LSTM
-Meta-model:   XGBoost (100 trees, lr=0.1, max_depth=3)
-Target:       ratio [0, 3]
-CV:           GroupKFold(5), station_grouped
-```
-
-The four base models provide genuine diversity:
-- **XGBoost**: Gradient-boosted trees — captures complex non-linear interactions
-- **RandomForest**: Bagged trees — high variance, different split strategies
-- **Ridge**: Linear with L2 — completely different hypothesis space
-- **LSTM**: Bidirectional LSTM (32 hidden, 2 layers, seq_len=4) — temporal patterns
-
-The meta-model learns optimal weighting of all four. LSTM contributes the temporal
-dimension that static models cannot capture; Ridge provides a regularising linear anchor.
-
-### Pre-LSTM Benchmarks (5-fold GroupKFold CV)
-
-| Model | RMSE ± Std | Δ vs Raw |
-|---|---|---|
-| Raw NASA | 178.78 | — |
-| Ridge | 141.30 ± 4.58 | −37.48 |
-| XGBoost | 141.44 ± 5.65 | −37.34 |
-| RF | 140.44 ± 5.95 | −38.34 |
-| Stacking (3-model) | 138.37 ± 5.03 | −40.41 |
-
-Full-sample (stacking, all 608k ZINDI records): RMSE 117.47, MAE 59.83,
-global bias +31.54, median per-station bias +0.9 W/m².
-
-### RMSE Progression (5-fold grouped CV)
-
-| Stage | RMSE | Notes |
-|---|---|---|---|
-| Raw NASA | 178.78 | Baseline uncorrected |
-| Ratio target | 138.97 | After switching from kt to ratio |
-| + AOD at 550nm | 138.96 | Marginal (AOD already partially captured) |
-| + Station bias fix + Ridge stacking | 138.75 | Zeroed station_bias in k-fold |
-| + Cloud variability features | 138.37 | Best pre-LSTM (3-model stacking) |
-| + LSTM (single) | 138.28 | LSTM standalone, 21 features, seq_len=4 |
-| + LSTM 5-ensemble | 137.95 | LSTM with 5 different random seeds averaged |
-| + **UniSolar Stacking** (4-model) | **136.84** | **XGBoost+RF+Ridge+LSTM → XGBoost meta** |
-
----
-
-## Phase 2 — LSTM: Temporal Deep Learning
-
-### Motivation
-
-Tree-based models see each row independently. They cannot learn patterns of cloud
-evolution — whether the sky is clearing, clouding over, or transitioning between
-aerosol regimes. The single `ghi_satellite_lag1` feature (t-3h) provides only
-the most recent snapshot.
-
-An LSTM with a 24-hour lookback window (8 timesteps × 3h) can model:
-- Cloud advection (broken clouds moving across a site)
-- Clearing vs clouding rates (clearness_index_delta over multiple timesteps)
-- Diurnal cycle phase shifts
-- Multi-day aerosol persistence (harmattan dust episodes)
-
-### Architecture
-
-| Parameter | Value |
-|---|---|
-| Type | Bidirectional LSTM |
-| Layers | 1 |
-| Hidden dims | 32 |
-| Lookback | 8 timesteps (24h @ 3-hourly) |
-| Features | 21 (subset of the 36 tree features) |
-| Output | Sigmoid × 3 → ratio [0, 3] |
-| Optimizer | AdamW (lr=1e-3, weight_decay=1e-4) |
-| Scheduler | ReduceLROnPlateau (factor=0.5, patience=4) |
-| Early stopping | 8 stale epochs |
-| Batch size | 64 (k-fold) / 256 (standalone) |
-| Normalization | Per-fold: train mean/std → train + val |
-| Training | PyTorch CPU (M3 Mac, 16 GB) |
-
-### LSTM Feature Set (21 features)
+The LSTM uses a reduced feature set focused on temporal dynamics:
 
 ```
 ghi_satellite, dni_satellite, dhi_satellite
 ghi_satellite_lag1, ghi_satellite_lag2
 temp_air, relative_humidity, wind_speed
 hour_sin, hour_cos, month_sin, month_cos
-pm25, aod_550, clearness_index
-clearness_index_lag1, clearness_index_std_3h, clearness_index_delta
+pm25, aod_550
+clearness_index, clearness_index_lag1, clearness_index_std_3h, clearness_index_delta
 solar_zenith, solar_elevation, clear_sky_ghi
 ```
 
-Excluded from the full 36: station_bias (zeroed), lag1 variants of DNI/DHI
-(highly collinear with GHI lags), categorical climate_zone, dist_to_coast_km,
-elevation_m, albedo, airmass, cloud_amt, latitude_f, longitude_f.
+### Key Feature Groups
 
-### Full 5-Fold CV Results
-
-| Fold | XGBoost | LSTM | Δ |
-|---|---|---|---|
-| 1 | 133.46 | 134.41 | −0.95 |
-| 2 | 137.17 | **134.64** | +2.53 |
-| 3 | 145.87 | **143.35** | +2.52 |
-| 4 | 141.63 | **136.81** | +4.82 |
-| 5 | 149.07 | **144.15** | +4.92 |
-| **Mean** | **141.44 ± 5.65** | **138.67 ± 4.24** | **+2.77** |
-
-LSTM beats XGBoost on **4/5 folds** with **lower cross-fold variance**
-(±4.24 vs ±5.65). This is with a minimal architecture (32 dim, 1 layer) —
-no hyperparameter tuning has been performed.
-
-### Why LSTM Wins
-
-1. **Temporal structure**: 8 timesteps capture 24h of cloud evolution. XGBoost
-   only sees a single lag-3h snapshot.
-2. **Sequence normalization**: Each fold normalises by its own mean/std,
-   removing per-station scale shifts naturally.
-3. **Lower variance**: Suggests better spatial generalization — the LSTM learns
-   temporal patterns that transfer across stations, rather than station-specific
-   static corrections.
-4. **Fewer features**: 21 vs 36 — the LSTM extracts more signal per feature
-   through the temporal dimension.
-
----
-
-## Architecture & Pipeline
-
-### Layer Architecture
-
-```
-[Raw NASA POWER] → WeatherCorrectionLayer._build_features()
-                       ↓
-              36 engineered features
-                       ↓
-        ┌──────────────┼──────────────┬──────────────┐
-        ↓              ↓              ↓              ↓
-    XGBoost(R)     RandomForest(R)  Ridge(R)     LSTM(R)
-        │              │              │              │
-        └──────────────┼──────────────┼──────────────┘
-                       ↓
-              meta_X [n, 4] ratios
-                       ↓
-               XGBoost meta-model
-                       ↓
-              ratio_pred [0, 3]
-                       ↓
-         ghi = satellite × ratio
-                       ↓
-         + station_calibration delta
-                       ↓
-            [ghi_corrected, dni_corrected]
-```
-
-### Production Inference
-
-`core/layers/weather_model.py` — `WeatherCorrectionLayer.predict()`:
-
-1. **Feature engineering** (`_build_features`): Computes solar geometry via pvlib
-   Ineichen model, cyclical encoding, cloud variability features, lags, AOD.
-2. **Feature alignment**: Reads feature names from saved model to ensure
-   compatibility (handles model versioning).
-3. **Stacking inference**: Runs all 4 base models (XGBoost + RF + Ridge + LSTM),
-   builds sliding-window sequences for LSTM, concatenates ratio predictions,
-   feeds to meta-model.
-4. **Max correction clipping**: Caps corrected GHI at `clear_sky_ghi × 1.6`
-   (allows +60% correction).
-5. **Night zeroing**: Forces zero for hours 0-5 and 19-23.
-6. **Station calibration**: Applies per-station bias from
-   `station_calibration.json` (computed during retraining).
+| Group | Features | Purpose |
+|-------|----------|---------|
+| **Satellite Core** | GHI, DNI, DHI + lags | Raw irradiance measurements |
+| **Atmospheric** | PM2.5, AOD, cloud amount | Aerosol/cloud interference |
+| **Solar Geometry** | Zenith, elevation, airmass | Sun position physics |
+| **Cloud Variability** | Rolling std, delta, lag1 | Temporal cloud dynamics |
+| **Location** | Lat/lon, coast distance, elevation | Spatial generalization |
+| **Temporal** | Hour/month cyclical encoding | Diurnal/seasonal patterns |
 
 ---
 
 ## Benchmarks
 
-### Grouped 5-Fold CV (Primary Metric)
+### Data Splits
 
-| Model | RMSE ± Std | Δ vs Raw |
-|---|---|---|
-| Raw NASA | 178.78 | — |
-| Ridge | 141.30 ± 4.58 | −37.48 |
-| XGBoost | 141.44 ± 5.65 | −37.34 |
-| RF | 140.44 ± 5.95 | −38.34 |
-| Stacking (3-model: XGBoost+RF+Ridge) | 138.37 ± 5.03 | −40.41 |
-| LSTM | 138.28 ± 5.98 | −40.50 |
-| **UniSolar Stacking (4-model: XGBoost+RF+Ridge+LSTM)** | **136.84 ± 5.19** | **−41.94** |
+Training data was built in three stages:
 
-### Full-Sample Performance (Stacking, 608k ZINDI records)
+| Version | Stations | Daytime Records | Description |
+|---------|----------|-----------------|-------------|
+| V1 (Jun 30) | ~40+ DB + 21 ZINDI | ~70K | Mixed DB+ZINDI, inflated scores |
+| V2 (Jul 27) | 23 validated | 42,138 | Clean data, honest evaluation |
+| **V3 (Jul 27)** | **21 (no Nigeria)** | **38,166** | **Current production** |
 
-| Metric | Value |
-|---|---|
-| RMSE | 117.47 |
-| MAE | 59.83 |
-| Global bias | +31.54 |
-| Median per-station bias | +0.9 W/m² |
+### Training Data Quality
 
-### Robustness
+| Metric | All 23 Stations | No Nigeria (21) |
+|--------|-----------------|-----------------|
+| Records (daytime) | 54,518 | 50,218 |
+| Raw NASA RMSE | 112.31 W/m² | 110.16 W/m² |
+| Raw NASA MAE | 78.76 W/m² | 77.02 W/m² |
+| Raw NASA R² | 0.841 | 0.850 |
+| Mean GHI ratio (ground/sat) | 0.989 | 1.012 |
 
-- Cross-validation is **station-grouped** (GroupKFold): no station appears in
-  both train and validation within a fold.
-- Station bias is **zeroed** during k-fold: prevents station identity leakage.
-- Sample weights by **GHI bin frequency**: upweights high-irradiance periods
-  (less common, more important for energy yield).
+### 5-Fold Grouped CV — V3 (21 stations, no Nigeria)
+
+| Model | RMSE ± Std | Δ vs Raw | Improvement |
+|-------|------------|----------|-------------|
+| Raw NASA | 110.16 | — | — |
+| Ridge | 100.08 ± 12.16 | −10.1 | 8.2% |
+| XGBoost | 94.06 ± 14.71 | −16.1 | 14.6% |
+| RF | 93.48 ± 14.79 | −16.7 | 15.1% |
+| **LSTM_BASE** | **90.98 ± 5.22** | **−19.2** | **17.4%** |
+| LSTM_ATTN | 91.33 ± 5.37 | −18.8 | 17.1% |
+
+### Per-Station Error Breakdown (V3, no Nigeria)
+
+| Station | Country | Records | Ratio | RMSE | R² |
+|---------|---------|---------|-------|------|-----|
+| navrongo_tier1 | GH | 3,927 | 1.023 | 85.9 | 0.921 |
+| TA00344 | ML | 2,129 | 0.917 | 92.3 | 0.899 |
+| TA00346 | ML | 2,118 | 0.962 | 98.6 | 0.888 |
+| TA00328 | ML | 2,239 | 0.915 | 96.8 | 0.883 |
+| TA00348 | ML | 2,103 | 1.292 | 102.2 | 0.878 |
+| TA00109 | GH | 2,090 | 0.751 | 153.7 | 0.551 |
+| TA00119 | GH | 2,114 | 0.768 | 153.1 | 0.489 |
+
+**Station difficulty range**: RMSE from 86 W/m² (navrongo) to 154 W/m² (TA00109)
+
+### Per-Station Calibration
+
+Per-station bias corrections are applied at inference time:
+
+```
+Median correction: +1.85 W/m²
+Range: +0.75 to +3.50 W/m²
+```
+
+Stored in `core/models/station_calibration.json`.
+
+### Historical RMSE Progression
+
+| Stage | RMSE | Notes |
+|-------|------|-------|
+| Raw NASA POWER | 178.78 | Original V1 data (inflated) |
+| V1 XGBoost | 82.67 | Included easy DB stations |
+| V2 RF (23 stn) | 91.04 | Clean data, honest eval |
+| **V3 LSTM_BASE (21 stn)** | **90.98** | **Current best** |
 
 ---
 
-## Key Decisions & Findings
+## Key Design Decisions
 
-### 1. Station Bias Must Be Zeroed in K-Fold
+### 1. Ratio Target Over Clearness Index
 
-The single most impactful bug fix. When station_bias is real in training but
-NaN/0 in validation, tree models learn non-generalizing splits. The fix is:
-always zero in k-fold, real only in final training. This corrected ~8 W/m²
-of inflated CV results.
+**Decision**: Use `ratio = GHI_ground / GHI_satellite` instead of `kt = GHI / clear_sky_ghi`
 
-### 2. Ratio > kt for Target
+**Rationale**:
+- `kt` amplifies cloudy-day errors: `error = clear_sky_ghi × error_in_kt`
+- `ratio` scales with signal: `error = GHI_satellite × error_in_ratio`
+- Produces lower median per-station bias
 
-kt amplifies cloudy-day errors by multiplying through clear_sky_ghi (large).
-Ratio multiplies by GHI_satellite (small on cloudy days). Both targets
-produce similar k-fold RMSE but ratio is physically better-behaved and
-produces lower median per-station bias.
+### 2. Station Bias Zeroing in K-Fold
 
-### 3. Ridge over LightGBM for Diversity
+**Decision**: Zero `station_bias` for both training and validation during k-fold
 
-Three tree models (XGBoost, RF, LightGBM) on identical features produce
-99.5% correlated predictions — stacking cannot improve. Ridge provides
-genuinely different linear predictions that the meta-model can weight
-productively.
+**Rationale**:
+- Tree models learned station-specific splits when bias was real in training but NaN in validation
+- This caused ~8 W/m² of inflated CV results
+- Fix: Always zero in k-fold, real only in final training
 
-### 4. Cloud Features Help Linears Most
+### 3. Clean Station Validation
 
-Ridge benefited most from cloud variability features (−1.65 W/m²) because
-it cannot learn non-linear interactions natively. Tree models already
-capture some of this through splits, so their improvement was smaller
-(−0.54 RF, −0.39 XGBoost).
+**Decision**: Filter to 23 validated stations, removing faulty/broken sensors
 
-### 5. LSTM in Stacking Achieves Best Results
+**Rationale**:
+- 4 stations excluded: TA00330 (ratio too high), TA00109/TA00122/TA00354 (>20% extreme ratios)
+- 2 Nigerian stations (TA00692, TA00696) excluded in V3 — satellite systematically overestimates by 25-30%
+- Filter criteria: mean ratio 0.6–1.1, <20% extreme ratio records
 
-The UniSolar Stacking (XGBoost+RF+Ridge+LSTM → XGBoost meta) achieves
-**136.84 W/m²** — the best result across all architectures. LSTM contributes
-the temporal dimension that static models cannot capture; the meta-model
-learns to weight all four predictors optimally. An LSTM 5-ensemble average
-(137.95 standalone, −0.33 vs single) is the next expected improvement.
+### 4. ECG Tariff Integration
 
-### 6. `power_AOD_55` Is Already MERRA-2
+**Decision**: Use official ECG May 2025 Tariff Reckoner for financial modeling
 
-NASA POWER's AOD parameter is sourced from MERRA-2 reanalysis, not from
-MODIS or VIIRS satellite retrievals. There is no improvement to be gained
-by fetching "raw MERRA-2" — it's the same data, just at different temporal
-aggregation. The real upgrade would be MERRA-2 aerosol speciation
-(dust, sea salt, BC, OC, sulfate from M2T1NXAER).
+**Rationale**:
+- Tiered tariff structure reflects real Ghanaian electricity costs
+- Includes all levies, VAT, and regulatory charges
+- More accurate than flat-rate assumptions for project financing
 
-### 7. Temporal Footprint Mismatch
+### 5. PVLib for Physics Engine
 
-NASA POWER GHI is a 3-hour average around each timestamp. Ground truth
-is instantaneous. Averaging GT ±1.5h around each POWER timestamp would
-better align the targets with the predictors. Not yet implemented but
-zero-cost and likely worth +0.5-1 W/m².
+**Decision**: Use PVLib ModelChain for energy yield simulation
 
-### 8. Forward-Chaining Validation Limited
+**Rationale**:
+- Industry-standard open-source library for PV simulation
+- Sandia module database with 100+ real panel specifications
+- CEC inverter database with 3000+ inverter models
+- Handles temperature coefficients, shading, and electrical losses
 
-Ground truth data ends November 30, 2018 for most ZINDI stations (only
-TA00587 and TA00696 have 2019 data). This makes forward-chaining
-TimeSeriesSplit validation less informative — the temporal test windows
-are too small to evaluate seasonal generalization properly.
+---
+
+## Data Sources
+
+| Source | Type | Resolution | Coverage |
+|--------|------|------------|----------|
+| **NASA POWER** | Satellite reanalysis | 3-hourly, 0.5°×0.625° | Global |
+| **CAMS EAC4** | Aerosol reanalysis | 3-hourly, ~80 km | Global |
+| **ZINDI Challenge** | Ground truth | Hourly pyranometers | 21 stations, West Africa |
+| **Ghana Tier-1** | Ground truth | Hourly | 2 stations, Ghana |
+| **ECG Tariff** | Regulatory | Monthly billing tiers | Ghana nationwide |
+| **SRTM DEM** | Topography | 30m resolution | Global |
+
+### Training Data
+
+| Dataset | Records | Stations | Period |
+|---------|---------|----------|--------|
+| ZINDI Challenge | 34,568 | 21 | 2017-2019 |
+| Ghana Tier-1 (Navrongo + Sunyani) | 15,650 | 2 | 2017-2022 |
+| **Combined (clean)** | **50,218** | **21** | **2017-2022** |
+
+**Excluded Stations**: TA00338, TA00295, TA00064, TA00219 (faulty sensors), TA00330 (ratio too high), TA00109/TA00122/TA00354 (>20% extreme ratios), TA00692/TA00696 (Nigeria — systematic overestimation)
+
+---
+
+## System Architecture
+
+### Backend (FastAPI + Python)
+
+```
+api/main.py                 # REST API endpoints
+├── POST /simulate          # Full pipeline execution
+├── POST /size-system       # System sizing calculator
+├── GET  /modules           # Available panel models
+├── GET  /inverters         # Available inverter models
+├── GET  /ecg-tariff-info   # ECG tariff lookup
+└── POST /custom-module     # Add user-defined panels
+
+core/layers/                # 6-layer pipeline
+├── weather_model.py        # Layer 1: ML bias correction
+├── environmental_model.py  # Layer 2: Soiling/degradation
+├── geometry_model.py       # Layer 0: Spatial shading
+├── physics_model.py        # Layer 3: PVLib energy yield
+├── financial_model.py      # Layer 4: NPV/IRR/LCOE
+├── sustainability_model.py # Layer 5: CO2 avoidance
+└── ecg_tariff.py           # ECG tariff engine
+
+core/services/
+└── gis.py                  # GIS: coast distance, elevation, climate zones
+
+core/models/                # Trained model artifacts
+├── lstm_ratio.pt           # LSTM_BASE (production, 168 KB)
+├── lstm_attn_ratio.pt      # LSTM_ATTN (attention variant, 234 KB)
+├── rf_ghi.pkl              # Random Forest (240 MB, fallback)
+├── rf_dni.pkl              # RF for DNI
+├── xgboost_ghi.pkl         # XGBoost (20 MB)
+├── xgboost_dni.pkl         # XGBoost for DNI
+├── ridge_ghi.pkl           # Ridge (3 KB, baseline)
+├── ridge_dni.pkl           # Ridge for DNI
+├── default_ghi.pkl         # Default GHI model (RF)
+├── default_dni.pkl         # Default DNI model (RF)
+├── meta_ghi.pkl            # Stacking meta-model
+├── meta_dni.pkl            # Stacking meta-model (DNI)
+└── station_calibration.json # Per-station bias corrections
+```
+
+### Frontend (React + Vite)
+
+```
+frontend/src/
+├── pages/
+│   └── Dashboard.jsx       # Main application page
+├── components/
+│   └── dashboard/
+│       ├── MapViewport.jsx      # Interactive map with panel placement
+│       ├── Sidebar.jsx          # Configuration controls
+│       ├── ResultsPanel.jsx     # Real-time results display
+│       ├── ReportModal.jsx      # Lender-ready financial report
+│       ├── SizingHubModal.jsx   # System sizing calculator
+│       ├── AddressSearch.jsx    # Location search
+│       └── AddPanelModal.jsx    # Custom panel editor
+```
+
+### Data Flow
+
+```
+User places panels on map
+        ↓
+Frontend sends POST /simulate
+{
+  latitude, longitude, capacity_kw,
+  tilt, azimuth, panels[], features[],
+  system_cost_kw, om_cost_kw,
+  use_ecg_tariff, customer_type
+}
+        ↓
+Backend fetches NASA POWER data (if not cached)
+        ↓
+Layer 1: ML predicts correction ratio
+Layer 2: Environmental losses applied
+Layer 0: Obstacle shading calculated
+Layer 3: PVLib simulates energy yield
+Layer 4: Financial metrics computed
+Layer 5: CO2 avoidance calculated
+        ↓
+Response: { results, financials, probabilistic_results }
+        ↓
+Frontend displays: Annual Yield, NPV, Payback, IRR
+```
 
 ---
 
@@ -413,41 +428,38 @@ are too small to evaluate seasonal generalization properly.
 
 ### Training
 
-| Command | What it does |
-|---|---|
-| `python scripts/retrain_unified.py --kfold 5` | Run grouped 5-fold CV on specified models |
-| `python scripts/retrain_unified.py --stacking` | Train stacking ensemble + run CV |
-| `python scripts/retrain_unified.py --tune` | Run hyperparameter tuning before final training |
-| `python scripts/retrain_unified.py --zindi-only` | Train on ZINDI data only (exclude DB Ghana) |
-| `python scripts/retrain_unified.py --forward-chaining N` | Temporal validation with N splits |
-| `python scripts/train_lstm.py` | LSTM benchmark vs XGBoost (5-fold) |
-| `python scripts/train_lstm.py --seq-len 12 --epochs 60` | Custom LSTM parameters |
-
-### Evaluation & Visualization
-
-| Command | What it produces |
-|---|---|
-| `python scripts/plot_narrative.py` | 6-panel stakeholder summary (reports/figures/) |
-| `python scripts/plot_narrative.py --station TA00360` | Per-station narrative plots |
-| `python scripts/plot_rolling_analysis.py --station TA00360` | Rolling mean + cumulative bias |
-| `python scripts/plot_rolling_analysis.py --window 14d` | Custom rolling window |
-| `python scripts/compare_models.py` | Head-to-head benchmark of saved models |
+| Command | Description |
+|---------|-------------|
+| `python scripts/retrain_unified.py --clean --kfold 5` | Clean data, 5-fold CV |
+| `python scripts/retrain_unified.py --clean --lstm --models xgboost,rf,ridge` | Train LSTM + tree models |
+| `python scripts/retrain_unified.py --clean --exclude-country NG` | Exclude Nigerian stations |
+| `python scripts/retrain_unified.py --clean --stacking` | Train stacking ensemble |
+| `python scripts/retrain_unified.py --clean --tune` | Hyperparameter tuning |
 
 ### Data Pipeline
 
-| Command | What it does |
-|---|---|
-| `python scripts/fetch_cams_pm25.py` | Download CAMS EAC4 PM2.5 for all locations |
-| `python data/ingest_nasa.py` | Fetch NASA POWER data into SQLite DB |
-| `python data/ingest_solcast.py` | Fetch Solcast data (alternative satellite source) |
-| `python data/ingest_real_csv.py` | Ingest real ground truth from CSV files |
+| Command | Description |
+|---------|-------------|
+| `python scripts/build_clean_training_data.py` | Build clean parquet from NASA + ZINDI |
+| `python scripts/build_clean_training_data.py --skip-fetch` | Use cached NASA data |
+| `python scripts/fetch_cams_pm25.py` | Download CAMS PM2.5 data |
+| `python data/ingest_nasa.py` | Fetch NASA POWER data |
+| `python data/ingest_real_csv.py` | Ingest ground truth CSVs |
+
+### Visualization
+
+| Command | Description |
+|---------|-------------|
+| `python scripts/plot_narrative.py` | 6-panel stakeholder summary |
+| `python scripts/plot_rolling_analysis.py` | Rolling mean + cumulative bias |
+| `python scripts/compare_models.py` | Head-to-head model benchmark |
 
 ### Production Inference
 
 ```python
 from core.layers.weather_model import WeatherCorrectionLayer
 
-layer = WeatherCorrectionLayer(model_type='meta')
+layer = WeatherCorrectionLayer(model_type='lstm')
 layer.load_models()
 df_corrected = layer.predict(df_satellite)
 
@@ -456,124 +468,39 @@ df_corrected = layer.predict(df_satellite)
 
 ---
 
-## Data Flow
-
-### File Structure
-
-```
-root/
-├── core/
-│   ├── layers/
-│   │   └── weather_model.py    # Feature engineering + production inference
-│   ├── models/
-│   │   ├── xgboost_ghi.pkl     # Base model (GHI ratio)
-│   │   ├── xgboost_dni.pkl     # Base model (DNI ratio)
-│   │   ├── rf_ghi.pkl          # Base model (GHI ratio)
-│   │   ├── rf_dni.pkl          # Base model (DNI ratio)
-│   │   ├── ridge_ghi.pkl       # Base model (GHI ratio)
-│   │   ├── ridge_dni.pkl       # Base model (DNI ratio)
-│   │   ├── meta_ghi.pkl        # Stacking meta-model (GHI ratio)
-│   │   ├── meta_dni.pkl        # Stacking meta-model (DNI ratio)
-│   │   └── station_calibration.json  # Per-station bias post-hoc
-│   ├── services/
-│   │   └── gis.py              # GIS proxy computation (coast dist, elevation)
-│   └── database.py             # SQLAlchemy ORM
-├── scripts/
-│   ├── retrain_unified.py      # Main training pipeline
-│   ├── train_lstm.py           # LSTM benchmarks
-│   ├── plot_narrative.py       # Stakeholder summary plots
-│   ├── plot_rolling_analysis.py# Rolling analysis per station
-│   ├── compare_models.py       # Model comparison
-│   └── fetch_cams_pm25.py      # CAMS data fetch
-├── data/
-│   ├── processed/
-│   │   ├── training_nasa_power.parquet  # Training data (DB NASA)
-│   │   ├── nasa_for_db.parquet          # NASA POWER cache
-│   │   ├── cams_pm25.parquet            # CAMS PM2.5 cache
-│   │   └── training_info.json           # Training metadata
-│   ├── ingest_nasa.py          # NASA data pipeline
-│   ├── ingest_solcast.py       # Solcast data pipeline
-│   ├── ingest_ground_truth.py  # Ground truth simulation
-│   └── ingest_real_csv.py      # CSV ingestion
-├── api/
-│   └── main.py                 # FastAPI server
-├── reports/
-│   ├── figures/                # Current plots (9)
-│   └── minutes_20260616.md     # Project history
-└── frontend/                   # React UI (UniSolar platform)
-```
-
-### Data Processing Pipeline
-
-```
-NASA POWER API ──→ ingest_nasa.py ──→ SQLite DB (raw)
-                                              ↓
-CAMS EAC4 API ──→ fetch_cams_pm25.py ──→ cams_pm25.parquet
-                                              ↓
-ZINDI CSV ──→ retrain_unified.load_zindi() ──→ merged DataFrame
-DB SQLite ──→ retrain_unified.load_db_nasa() ──→ merged DataFrame
-                                              ↓
-                                     add_engineered_features()
-                                              ↓
-                                    GroupKFold(5) CV
-                                              ↓
-                                    Train final models
-                                              ↓
-                                    station_calibration.json
-                                              ↓
-                                    meta_ghi.pkl (production)
-```
-
----
-
 ## Way Forward
 
-### 1. LSTM Ensemble Averaging for Additional Variance Reduction
-LSTM is already the 4th base model in UniSolar Stacking (RMSE 136.84). The next
-step is to replace the single LSTM with a 5-seed ensemble average, which reduced
-RMSE from 138.28 → 137.95 (−0.33) in standalone testing. Expected to add −0.2
-to −0.5 W/m² to the full stacking ensemble.
+### Completed
+- [x] Clean station validation (23 stations, 4 broken removed)
+- [x] LSTM training on clean data (90.98 W/m² — new best)
+- [x] Per-station calibration (median +1.85 W/m² correction)
+- [x] Nigeria exclusion study (RF: 93.5 vs 91.0 with Nigeria)
 
-### 2. Station Quality Audit (Zero-Cost)
-Cleaning noisy ground truth labels is the highest-leverage zero-cost improvement.
-3 faulty stations were mentioned previously — removing or correcting them would
-improve every model equally.
-
-### 3. Larger LSTM Architecture
-- Hidden dims: 32 → 64 or 128
-- Layers: 1 → 2
-- Sequence: 8 → 16 timesteps (48h lookback)
-- Systematic hyperparameter search
-
-### 4. MERRA-2 Aerosol Speciation
-Current `power_AOD_55` is bulk AOD at 550nm (already MERRA-2). Fetching hourly
-aerosol components directly from GES DISC MERRA-2 (M2T1NXAER) would provide:
-dust, sea salt, black carbon, organic carbon, sulfate — each with different
-optical properties. Most relevant for Sahel dust events and biomass burning
-season. Requires NASA Earthdata authentication.
-
-### 5. GT Temporal Averaging
-Average ground truth ±1.5h around each NASA POWER timestamp to match temporal
-footprints. Zero-cost, likely +0.5-1 W/m².
-
-### 6. Grid Search on Cloud Features
-The stacking ensemble's grid search was last run before cloud variability features
-were added. Retuning would find optimal hyperparameters for the new feature set.
+### Next Steps
+1. **Deploy LSTM in production** — replace RF as default in `weather_model.py`
+2. **Station-quality weighting** — weight training by inverse station RMSE
+3. **Hour-of-day calibration** — time-dependent bias corrections per station
+4. **MERRA-2 aerosol speciation** — hourly dust/BC/OC from GES DISC
+5. **Larger LSTM architecture** — hidden 32→64, layers 2→3, sequence 4→8
+6. **Temporal averaging** — average ground truth ±1.5h around NASA timestamps
 
 ---
 
 ## Constraints
 
-- **Memory**: LSTM full 5-fold CV was killed multiple times on 16 GB M3 Mac.
-  Resolved by running LSTM and XGBoost as separate processes. Larger LSTM
-  architectures may require GPU or reduced batch size.
+- **Memory**: LSTM full 5-fold CV requires ~500 MB. Larger architectures may need GPU.
+- **Numpy/Torch compat**: PyTorch 2.2.0 compiled against NumPy 1.x — `.numpy()` calls fail, use `.tolist()` workaround.
 - **Temporal coverage**: ZINDI ground truth ends Nov 30, 2018 for most stations.
-  Only TA00587 and TA00696 have 2019 data. This limits forward-chaining validation.
-- **Spatial coverage**: 38 stations across West Africa, concentrated in Ghana and
-  Nigeria. Sparse coverage in Mali, Niger, Chad (where Saharan dust is heaviest).
+- **Spatial coverage**: 21 stations concentrated in Ghana/Mali. Sparse in Niger/Chad/Senegal.
 
 ---
 
 ## Project History
 
 Detailed project history and minutes available at `reports/minutes_20260616.md`.
+
+---
+
+## License
+
+Proprietary — UniSolar Enterprise Edition

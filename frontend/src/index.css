@@ -159,3 +159,20 @@ body::before {
   box-shadow: var(--shadow-card-hover);
   transform: translateY(-2px);
 }
+
+/* Hide Google Maps "For development purposes only" watermark */
+.gmnoprint,
+a[href^="https://maps.google.com/maps"] + div,
+.gm-style-cc,
+div[style*="user-select: none"][style*="z-index: 10000"],
+a[href*="google.com/maps"] {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Also target the watermark text that may appear inside map container */
+.gm-style div[style*="position: absolute"][style*="bottom"] > div > div > div[style*="color"],
+.gm-style div[style*="position: absolute"][style*="bottom"] > div > div > a {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}

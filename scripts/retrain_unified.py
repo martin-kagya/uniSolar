@@ -74,6 +74,7 @@ TUNE_PARAMS = {
 }
 
 DB_NASA_PATH = os.path.join(ROOT, "data", "processed", "training_nasa_power.parquet")
+CLEAN_PATH = os.path.join(ROOT, "data", "processed", "training_clean.parquet")
 ZINDI_DIR = "/Users/kagya/Desktop/ZINDI-PROJECT"
 
 BASE_MODELS = ["xgboost", "rf", "ridge", "lstm", "lstm_attn"]
@@ -203,7 +204,7 @@ def train_lstm_fold(tr, va, variant="base", seed=42):
     preds = []
     with torch.no_grad():
         for Xb, _ in vl:
-            preds.append(model(Xb).numpy())
+            preds.append(np.array(model(Xb).detach().cpu().tolist()))
     pred_ratio = np.clip(np.concatenate(preds).ravel(), 0.0, 3.0)
 
     result = pd.Series(np.nan, index=va.index)
@@ -300,7 +301,7 @@ def train_transformer_fold(tr, va):
     preds = []
     with torch.no_grad():
         for Xb, _ in vl:
-            preds.append(model(Xb).numpy())
+            preds.append(np.array(model(Xb).detach().cpu().tolist()))
     pred_ratio = np.clip(np.concatenate(preds).ravel(), 0.0, 3.0)
 
     result = pd.Series(np.nan, index=va.index)
@@ -473,6 +474,118 @@ def load_zindi():
     df["clearness_index_delta"] = df.groupby("station")["clearness_index"].diff(1).fillna(0.0)
 
     print(f"  ZINDI: {len(df):,} records, {df['group'].nunique()} stations")
+    return add_engineered_features(df)
+
+
+def load_clean():
+    """Load clean validated training data and apply all feature engineering."""
+    if not os.path.exists(CLEAN_PATH):
+        print(f"  [SKIP] Clean data not found at {CLEAN_PATH}. Run build_clean_training_data.py first.")
+        return pd.DataFrame()
+    df = pd.read_parquet(CLEAN_PATH)
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+    # Filter to daytime
+    df = df[(df["ghi_satellite"] > 0) | (df["ghi_ground"] > 0)].copy()
+    df["ghi_ground"] = pd.to_numeric(df["ghi_ground"], errors="coerce")
+    df = df[df["ghi_ground"].notna() & (df["ghi_ground"] >= 0)]
+
+    # Hour/month features
+    df["hour"] = df["timestamp"].dt.hour.astype(int)
+    df["month"] = df["timestamp"].dt.month.astype(int)
+    df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
+    df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
+    df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
+    df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
+
+    # Ensure dni_ground exists (ZINDI stations lack it)
+    if "dni_ground" not in df.columns or df["dni_ground"].isnull().all():
+        r = df["ghi_ground"] / np.maximum(df["ghi_satellite"], 1.0)
+        df["dni_ground"] = (df["dni_satellite"] * r).clip(lower=0)
+    else:
+        df["dni_ground"] = df["dni_ground"].fillna(0)
+
+    # PM2.5 — try CAMS, fallback to proxy
+    cams_path = os.path.join(ROOT, "data", "processed", "cams_pm25.parquet")
+    if os.path.exists(cams_path):
+        cams = pd.read_parquet(cams_path)
+        cams.rename(columns={"name": "station"}, inplace=True)
+        cams["timestamp"] = pd.to_datetime(cams["timestamp"])
+        df = df.sort_values("timestamp")
+        cams = cams.sort_values("timestamp")
+        df = pd.merge_asof(
+            df, cams[["station", "timestamp", "pm25_cams"]],
+            on="timestamp", by="station", direction="nearest",
+            tolerance=pd.Timedelta("90min")
+        )
+        df["pm25"] = df["pm25_cams"].fillna(np.nan)
+    if "pm25" not in df.columns or df["pm25"].isnull().all():
+        lat = df["latitude"]
+        df["pm25"] = ((12 + (lat - 5).clip(0, 15) * 5)).clip(8, 250)
+    else:
+        # Fill remaining NaN from CAMS merge with lat-based proxy
+        lat = df["latitude"]
+        proxy = ((12 + (lat - 5).clip(0, 15) * 5)).clip(8, 250)
+        df["pm25"] = df["pm25"].fillna(proxy)
+    df["pm25"] = df["pm25"].clip(0, 500)
+    df["albedo"] = 0.2
+    df["cloud_amt"] = 0.5
+
+    # GIS proxies
+    _l = WeatherCorrectionLayer()
+    us = df[["station", "latitude", "longitude"]].drop_duplicates("station")
+    def gis(r):
+        d, e, z = _l._get_proxies(r["latitude"], r["longitude"])
+        return pd.Series({"dist_to_coast_km": d, "elevation_m": e, "climate_zone": z})
+    gm = us.apply(gis, axis=1); gm.index = us["station"].values
+    df = df.join(gm, on="station")
+
+    df["source_weight"] = 2.0
+    df["group"] = df["station"]
+
+    # Solar geometry + Ineichen clear-sky (pvlib) — per-station
+    import pvlib
+    df["solar_zenith"] = np.nan
+    df["solar_elevation"] = np.nan
+    df["airmass"] = np.nan
+    df["clearness_index"] = np.nan
+    for (lat, lon), gidx in df.groupby(
+        [df["latitude"].round(2), df["longitude"].round(2)], sort=False
+    ).indices.items():
+        idx = df.index[gidx]
+        elev = float(df.loc[idx[0], "elevation_m"]) if "elevation_m" in df.columns else 100.0
+        times = pd.DatetimeIndex(df.loc[idx, "timestamp"])
+        loc = pvlib.location.Location(latitude=lat, longitude=lon, altitude=elev)
+        sp = loc.get_solarposition(times)
+        df.loc[idx, "solar_zenith"] = sp["apparent_zenith"].values
+        df.loc[idx, "solar_elevation"] = sp["apparent_elevation"].values
+        df.loc[idx, "airmass"] = pvlib.atmosphere.get_relative_airmass(
+            np.maximum(sp["apparent_zenith"].values, 0.01)
+        )
+        cs = loc.get_clearsky(times, model="ineichen")
+        df.loc[idx, "clear_sky_ghi"] = cs["ghi"].values
+        df.loc[idx, "clear_sky_dni"] = cs["dni"].values
+        df.loc[idx, "clearness_index"] = np.clip(
+            df.loc[idx, "ghi_satellite"].values / np.maximum(cs["ghi"].values, 1.0),
+            0.0, 1.2
+        )
+
+    # Lag-1 features
+    df = df.sort_values(["station", "timestamp"]).reset_index(drop=True)
+    for src, dst in [("ghi_satellite", "ghi_satellite_lag1"),
+                     ("dni_satellite", "dni_satellite_lag1"),
+                     ("dhi_satellite", "dhi_satellite_lag1")]:
+        df[dst] = df.groupby("station")[src].shift(1).fillna(df[src])
+
+    # Cloud variability features
+    df["ghi_satellite_lag2"] = df.groupby("station")["ghi_satellite"].shift(2).fillna(df["ghi_satellite"])
+    df["clearness_index_lag1"] = df.groupby("station")["clearness_index"].shift(1).fillna(df["clearness_index"])
+    df["clearness_index_std_3h"] = df.groupby("station")["clearness_index"].transform(
+        lambda x: x.rolling(3, min_periods=1).std()
+    ).fillna(0.0)
+    df["clearness_index_delta"] = df.groupby("station")["clearness_index"].diff(1).fillna(0.0)
+
+    print(f"  CLEAN: {len(df):,} records, {df['group'].nunique()} stations")
     return add_engineered_features(df)
 
 
@@ -695,6 +808,9 @@ def main():
     ap.add_argument("--kfold", type=int, default=5)
     ap.add_argument("--tune", action="store_true", help="Run hyperparameter tuning")
     ap.add_argument("--zindi-only", action="store_true", help="Train on ZINDI data only (no DB)")
+    ap.add_argument("--clean", action="store_true", help="Use clean validated training data (23 stations)")
+    ap.add_argument("--exclude-country", type=str, default="", help="Exclude stations from this country code (e.g. NG)")
+    ap.add_argument("--lstm", action="store_true", help="Include LSTM in k-fold CV and final training")
     ap.add_argument("--stacking", action="store_true", help="Train stacking ensemble (base models + meta)")
     ap.add_argument("--forward-chaining", type=int, default=0,
                     help="Number of forward-chaining temporal splits (0=disabled)")
@@ -702,18 +818,27 @@ def main():
                     help="LSTM sequence length in timesteps")
     args = ap.parse_args()
     model_list = [m.strip() for m in args.models.split(",")]
-    mode = "ZINDI-only" if args.zindi_only else "Combined (DB+ZINDI)"
+    if args.clean:
+        mode = "Clean (23 validated stations)"
+    elif args.zindi_only:
+        mode = "ZINDI-only"
+    else:
+        mode = "Combined (DB+ZINDI)"
     global LSTM_SEQ_LEN
     LSTM_SEQ_LEN = args.lstm_seq_len
 
     # Load
     print("=" * 65, "\nLOADING DATA\n", "=" * 65, sep="")
     dfs = []
-    if not args.zindi_only:
-        d = load_db_nasa()
-        if not d.empty: dfs.append(d)
-    z = load_zindi()
-    if not z.empty: dfs.append(z)
+    if args.clean:
+        c = load_clean()
+        if not c.empty: dfs.append(c)
+    else:
+        if not args.zindi_only:
+            d = load_db_nasa()
+            if not d.empty: dfs.append(d)
+        z = load_zindi()
+        if not z.empty: dfs.append(z)
     if not dfs:
         print("No data. Aborting."); return
     df = pd.concat(dfs, ignore_index=True)
@@ -724,6 +849,13 @@ def main():
     # Daytime only
     mask = (df["ghi_satellite"] > 0) | (df["ghi_ground"] > 0)
     df = df[mask].copy()
+
+    # Exclude countries
+    if args.exclude_country:
+        excl = args.exclude_country.upper()
+        before = len(df)
+        df = df[df["country"].str.upper() != excl].copy()
+        print(f"  Excluded country={excl}: {before:,} -> {len(df):,} records, {df['group'].nunique()} groups")
 
     print(f"\n  {mode}: {len(df):,} records, {df['group'].nunique()} groups")
     raw_rmse = np.sqrt(((df['ghi_ground'] - df['ghi_satellite'])**2).mean())
@@ -743,6 +875,38 @@ def main():
             print(f"  (Δ vs raw: {imp:+.1f})")
             for i, r in enumerate(folds):
                 print(f"    Fold {i+1}: {r:.2f}")
+
+    # LSTM k-fold
+    lstm_kfold_rmse = None
+    if args.lstm and args.kfold > 0:
+        print(f"\n{'=' * 65}")
+        print(f"GROUPED {args.kfold}-FOLD CROSS-VALIDATION — LSTM ({mode})")
+        print("=" * 65)
+        groups = df["group"].values
+        gkf = GroupKFold(n_splits=args.kfold)
+        lstm_rmses = []
+        for ti, vi in gkf.split(df, y=df["ghi_ground"] - df["ghi_satellite"], groups=groups):
+            tr, va = df.iloc[ti].copy(), df.iloc[vi].copy()
+            for variant_label, variant in [("base", "base"), ("attn", "attn")]:
+                ps = [train_lstm_fold(tr, va, variant=variant, seed=s).values
+                      for s in range(LSTM_N_SEEDS)]
+                pred_ratio = np.nanmean(ps, axis=0)
+                valid = pred_ratio.notna()
+                if valid.sum() == 0:
+                    continue
+                pred = va.loc[valid.index[valid], "ghi_satellite"].values * pred_ratio[valid].values
+                rmse = np.sqrt(mean_squared_error(va.loc[valid.index[valid], "ghi_ground"].values, pred))
+                lstm_rmses.append(rmse)
+        if lstm_rmses:
+            lstm_kfold_rmse = np.mean(lstm_rmses[:len(lstm_rmses)//2])  # base variant folds
+            attn_rmse = np.mean(lstm_rmses[len(lstm_rmses)//2:]) if len(lstm_rmses) > args.kfold else None
+            print(f"  LSTM_BASE    : {np.mean(lstm_rmses[:args.kfold]):.2f} W/m²  (Δ vs raw: {raw_rmse - np.mean(lstm_rmses[:args.kfold]):+.1f})")
+            if attn_rmse is not None:
+                print(f"  LSTM_ATTN    : {attn_rmse:.2f} W/m²  (Δ vs raw: {raw_rmse - attn_rmse:+.1f})")
+            for i, r in enumerate(lstm_rmses[:args.kfold]):
+                print(f"    Base Fold {i+1}: {r:.2f}")
+            for i, r in enumerate(lstm_rmses[args.kfold:args.kfold*2]):
+                print(f"    Attn Fold {i+1}: {r:.2f}")
 
     # Stacking ensemble k-fold
     stacking_rmse = None
@@ -845,7 +1009,7 @@ def main():
                         Xb, _, _ = lstm_sequences(gdf, LSTM_FEATURES, LSTM_SEQ_LEN)
                         if len(Xb) == 0: continue
                         Xb = (Xb - m_s) / s_s
-                        pr = model(torch.FloatTensor(Xb)).numpy().ravel()
+                        pr = np.array(model(torch.FloatTensor(Xb)).detach().cpu().tolist()).ravel()
                         gidx = gdf.index.values
                         full[gidx[LSTM_SEQ_LEN-1:]] = np.clip(pr, 0.0, 3.0)
                 all_preds.append(full)
@@ -944,6 +1108,55 @@ def main():
         kfold_str = f"{kfold_results.get(best, 0):.2f}" if isinstance(kfold_results.get(best), (int, float)) else str(kfold_results.get(best, 'N/A'))
         print(f"  Default → {best} (k-fold: {kfold_str})")
 
+    # LSTM standalone final training
+    if args.lstm and not args.stacking:
+        print(f"\n  Training LSTM final models...")
+        for variant_label, variant in [("base", "base"), ("attn", "attn")]:
+            t0 = time.time()
+            ckpt, _ = _train_lstm_full(variant, n_seeds=LSTM_N_SEEDS) if args.stacking else (None, None)
+            if not args.stacking:
+                # Train LSTM on full data
+                df_seq = df.copy().reset_index(drop=True)
+                df_seq['station_bias'] = 0.0
+                X_seq, y_seq, _ = lstm_sequences(df_seq, LSTM_FEATURES, LSTM_SEQ_LEN)
+                m_s = X_seq.mean(axis=(0, 1), keepdims=True)
+                s_s = X_seq.std(axis=(0, 1), keepdims=True) + 1e-8
+                X_seq_n = (X_seq - m_s) / s_s
+                sl = DataLoader(SeqDataset(X_seq_n, y_seq), LSTM_BATCH_SIZE, shuffle=True)
+
+                best_model = None
+                best_loss = float('inf')
+                for seed in range(LSTM_N_SEEDS):
+                    torch.manual_seed(seed)
+                    np.random.seed(seed)
+                    model = make_lstm_model(variant)
+                    opt = optim.AdamW(model.parameters(), lr=LSTM_LR, weight_decay=1e-4)
+                    sched = optim.lr_scheduler.ReduceLROnPlateau(opt, mode='min', factor=0.5, patience=3)
+                    crit = nn.MSELoss()
+                    best_val = float('inf'); stale = 0
+                    for ep in range(LSTM_EPOCHS):
+                        model.train()
+                        for Xb, yb in sl:
+                            opt.zero_grad()
+                            crit(model(Xb), yb).backward()
+                            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                            opt.step()
+                        model.eval()
+                        with torch.no_grad():
+                            vloss = sum(crit(model(Xb), yb).item() * len(Xb) for Xb, yb in sl) / len(sl.dataset)
+                        sched.step(vloss)
+                        if vloss < best_val: best_val = vloss; stale = 0
+                        else: stale += 1
+                        if stale >= LSTM_PATIENCE: break
+                    if best_val < best_loss:
+                        best_loss = best_val
+                        best_model = model
+                ckpt = {'model_state': best_model.state_dict(), 'mean': m_s, 'std': s_s}
+            suffix = "attn_" if variant == "attn" else ""
+            path = f"core/models/lstm{'_attn' if variant=='attn' else ''}_ratio.pt"
+            torch.save(ckpt, path)
+            print(f"  LSTM_{variant.upper():8s}: ({time.time()-t0:.0f}s)  {path}")
+
     # Per-station calibration
     print(f"\n  Computing per-station calibration...")
     df = df.reset_index(drop=True)
@@ -964,7 +1177,7 @@ def main():
                         Xb, _, _ = lstm_sequences(gdf, LSTM_FEATURES, LSTM_SEQ_LEN)
                         if len(Xb) > 0:
                             Xb = (Xb - m_s) / s_s
-                            pr = model(torch.FloatTensor(Xb)).numpy().ravel()
+                            pr = np.array(model(torch.FloatTensor(Xb)).detach().cpu().tolist()).ravel()
                             lstm_preds_all.extend(pr)
                 full = np.ones(len(df))
                 for g in df['group'].unique():

@@ -14,7 +14,8 @@ class FinancialLayer:
     def __init__(self, system_cost_per_kw=20000.0, annual_om_cost=320.0,
                  electricity_tariff=1.90, discount_rate=0.08, lifetime_years=25,
                  tariff_escalation_rate=0.03, om_escalation_rate=0.02,
-                 degradation_rate=0.005,
+                 degradation_rate=0.005, lid_rate=0.02,
+                 debt_ratio=0.65, interest_rate=0.12, loan_term_years=10,
                  use_ecg_tariff=True, customer_type="residential"):
         """
         :param system_cost_per_kw:     Initial CAPEX per kWp (Default: 20,000 GH₵)
@@ -23,7 +24,11 @@ class FinancialLayer:
         :param discount_rate:          Weighted Average Cost of Capital (WACC)
         :param tariff_escalation_rate: Annual increase in electricity cost (fraction)
         :param om_escalation_rate:     Annual inflation in O&M costs (fraction)
-        :param degradation_rate:       Annual solar panel degradation (fraction)
+        :param degradation_rate:       Annual solar panel degradation after Year 1 (fraction)
+        :param lid_rate:               Year 1 Light Induced Degradation (fraction, default 2%)
+        :param debt_ratio:             Fraction of CAPEX financed via debt (default 65%)
+        :param interest_rate:          Annual interest rate on debt (default 12%)
+        :param loan_term_years:        Debt repayment period in years (default 10)
         :param use_ecg_tariff:         If True, use ECG official tariff reckoner for savings
         :param customer_type:          'residential' or 'non_residential' (ECG tariff mode)
         """
@@ -35,6 +40,10 @@ class FinancialLayer:
         self.tariff_escalation_rate = tariff_escalation_rate
         self.om_escalation_rate = om_escalation_rate
         self.degradation_rate = degradation_rate
+        self.lid_rate = lid_rate
+        self.debt_ratio = debt_ratio
+        self.interest_rate = interest_rate
+        self.loan_term_years = loan_term_years
         self.use_ecg_tariff = use_ecg_tariff
         self.customer_type = customer_type
 
@@ -74,8 +83,11 @@ class FinancialLayer:
         total_om_life = 0
 
         for year in range(1, self.lifetime_years + 1):
-            # 1. Panel Degradation — less energy each year
-            degradation_factor = (1.0 - self.degradation_rate) ** (year - 1)
+            # 1. Panel Degradation — LID in Year 1, then linear degradation
+            if year == 1:
+                degradation_factor = (1.0 - self.lid_rate)
+            else:
+                degradation_factor = (1.0 - self.lid_rate) * (1.0 - self.degradation_rate) ** (year - 1)
             year_energy = annual_energy_kwh * degradation_factor
             total_energy_life += year_energy / ((1 + self.discount_rate) ** year)
 
@@ -106,14 +118,20 @@ class FinancialLayer:
         except Exception:
             irr = self._manual_irr(cash_flows)
 
-        # 3. Payback Period
+        # 3. Payback Period (fractional interpolation)
         cumulative_cash = -capex
-        payback = 0
+        payback = 0.0
+        prev_cumulative = cumulative_cash
         for year in range(1, self.lifetime_years + 1):
             net_cash = cash_flows[year]
+            prev_cumulative = cumulative_cash
             cumulative_cash += net_cash
             if cumulative_cash >= 0:
-                payback = year
+                if prev_cumulative < 0:
+                    fraction = -prev_cumulative / net_cash
+                    payback = (year - 1) + fraction
+                else:
+                    payback = float(year)
                 break
 
         # 4. LCOE (GH₵/kWh)
@@ -123,6 +141,44 @@ class FinancialLayer:
 
         # 5. Effective tariff info
         effective_rate_y1 = self._effective_rate_y1(annual_energy_kwh)
+
+        # 6. Debt Service & DSCR
+        debt_amount = capex * self.debt_ratio
+        equity_amount = capex * (1.0 - self.debt_ratio)
+        
+        # Constant annual debt service (annuity)
+        if self.interest_rate > 0 and self.loan_term_years > 0:
+            r = self.interest_rate
+            n = self.loan_term_years
+            annual_debt_service = debt_amount * (r * (1 + r)**n) / ((1 + r)**n - 1)
+        else:
+            annual_debt_service = debt_amount / max(self.loan_term_years, 1)
+        
+        # DSCR for each year of the loan (minimum DSCR is the critical metric)
+        min_dscr = float('inf')
+        dscr_by_year = []
+        for year in range(1, min(self.lifetime_years, self.loan_term_years) + 1):
+            net_cash = cash_flows[year]
+            if annual_debt_service > 0:
+                dscr = net_cash / annual_debt_service
+            else:
+                dscr = float('inf')
+            dscr_by_year.append(round(dscr, 2))
+            if dscr < min_dscr:
+                min_dscr = dscr
+        
+        if min_dscr == float('inf'):
+            min_dscr = 0.0
+
+        # 7. O&M Line-Item Breakdown (per kWp/year, transparent assumptions)
+        om_per_kw = self.annual_om_cost
+        om_breakdown = {
+            "cleaning": round(om_per_kw * 0.25, 0),
+            "inverter_reserve": round(om_per_kw * 0.19, 0),
+            "monitoring": round(om_per_kw * 0.12, 0),
+            "insurance": round(om_per_kw * 0.16, 0),
+            "spare_parts": round(om_per_kw * 0.28, 0),
+        }
 
         return {
             "capex": capex,
@@ -135,6 +191,18 @@ class FinancialLayer:
             "lifetime_savings": sum(cash_flows[1:]) - capex,
             "tariff_mode": "ecg_official" if self.use_ecg_tariff else "flat_rate",
             "customer_type": self.customer_type if self.use_ecg_tariff else None,
+            "om_breakdown": om_breakdown,
+            "om_per_kw": om_per_kw,
+            "debt": {
+                "debt_amount": round(debt_amount),
+                "equity_amount": round(equity_amount),
+                "debt_ratio_pct": self.debt_ratio * 100,
+                "interest_rate_pct": self.interest_rate * 100,
+                "loan_term_years": self.loan_term_years,
+                "annual_debt_service": round(annual_debt_service),
+                "min_dscr": round(min_dscr, 2),
+                "dscr_by_year": dscr_by_year,
+            },
         }
 
     def _manual_irr(self, cash_flows, iterations=100):

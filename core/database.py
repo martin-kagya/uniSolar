@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Index
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, ForeignKey, Index, Text
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from datetime import datetime
 import os
@@ -77,6 +77,27 @@ class SimulationRun(Base):
     
     # JSON blob for detailed monthly/daily results if needed
     detailed_results_json = Column(String, nullable=True)
+
+class Design(Base):
+    __tablename__ = 'designs'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Location
+    latitude = Column(Float, nullable=False)
+    longitude = Column(Float, nullable=False)
+    map_zoom = Column(Float, default=18)
+    
+    # Full design state as JSON blob
+    config_json = Column(Text, nullable=False)        # simulation config
+    polygon_areas_json = Column(Text, nullable=False)  # drawn site boundaries
+    obstacles_json = Column(Text, nullable='[]')       # trees, buildings, etc.
+    panel_config_json = Column(Text, nullable=False)   # gcr, orientation, gaps
+    electrical_json = Column(Text, nullable=False)     # panelsPerString, inverterKw
+    placed_panels_json = Column(Text, nullable=True)   # optional cached layout
 
 # Database Setup
 def init_db(db_path='solar_platform.db'):

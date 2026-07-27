@@ -46,6 +46,11 @@ class PhysicsLayer:
                  inverter_efficiency=0.96):
         """
         Runs the PVLib simulation chain.
+        
+        Args:
+            shading_penalty: Per-timestep shading fraction [0-1] (pd.Series).
+                Element-wise applied: noon unaffected, dawn/dusk shaded as needed.
+                Pass None for no obstacle shading.
         """
 
         
@@ -148,22 +153,21 @@ class PhysicsLayer:
                 inverter_parameters=inverter_params
             )
         else:
-            # Generic Inverter
+            # Generic Inverter — use the inverter_efficiency parameter (not hardcoded 0.98)
             system = PVSystem(
                 arrays=[array],
-                inverter_parameters={'pdc0': sim_capacity_kw * 1000, 'eta_inv_nom': 0.98}
+                inverter_parameters={'pdc0': sim_capacity_kw * 1000, 'eta_inv_nom': inverter_efficiency}
             )
         
-        # 3. Model Chain with 3D Shading
-        # If GCR is provided, we account for self-shading (Row-to-Row)
-        if gcr:
-             # Basic 1-D shading model for fixed tilt
-             # This applies losses to the plane-of-array irradiance
-             print(f"DEBUG: Applying Row-to-Row Shading (GCR: {gcr})")
-             # ModelChain doesn't directly take shading as a parameter in all versions, 
-             # so we apply it to the weather before run_model if needed, 
-             # or use the losses parameter.
-             pass
+        # 3. Row-to-Row Shading (PVLib shaded_fraction1d)
+        if gcr and gcr > 0 and gcr <= 1:
+             from core.layers.geometry_model import GeometryLayer, compute_row_pitch
+             geom = GeometryLayer(surface_tilt=tilt, surface_azimuth=azimuth, gcr=gcr)
+             sp = location.get_solarposition(sim_weather.index)
+             row_shade = geom.calculate_shading(sp['apparent_zenith'], sp['azimuth'])
+             sim_weather['ghi'] *= (1.0 - row_shade)
+             sim_weather['dni'] *= (1.0 - row_shade)
+             sim_weather['dhi'] *= (1.0 - row_shade)
 
         mc = ModelChain(system, location, aoi_model='physical', spectral_model='no_loss')
         
@@ -194,6 +198,7 @@ class PhysicsLayer:
         USE_FALLBACK = False
         total_ac = ac_raw.values.sum() if hasattr(ac_raw, 'values') else ac_raw.sum()
         
+        dc_series = None
         if mc.results.dc is not None:
              if isinstance(mc.results.dc, pd.DataFrame) and 'p_mp' in mc.results.dc.columns:
                   dc_series = mc.results.dc['p_mp'].fillna(0)
@@ -212,7 +217,20 @@ class PhysicsLayer:
                      USE_FALLBACK = True
         
         if USE_FALLBACK:
-             ac_raw = dc_series * 0.96
+             ac_raw = dc_series * inverter_efficiency
+        
+        # Track inverter loss: compare DC output (pre-inverter) to AC output (post-inverter)
+        # ac_raw already has inverter efficiency baked in by PVLib ModelChain.
+        # We extract inverter loss so it appears as its own category in the waterfall.
+        # Also compute actual efficiency so Key Assumptions matches the waterfall.
+        inverter_loss_val = 0.0
+        actual_inverter_efficiency = inverter_efficiency  # default to the parameter
+        if dc_series is not None and not USE_FALLBACK:
+             total_dc_scaled = dc_series.sum() * num_inverters
+             total_ac_pre_env = ac_raw.sum() * num_inverters
+             if total_dc_scaled > 0:
+                  inverter_loss_val = max(0, (total_dc_scaled - total_ac_pre_env)) / 1000.0
+                  actual_inverter_efficiency = total_ac_pre_env / total_dc_scaled
         
         # Scale up to full system size
         ac_raw = ac_raw * num_inverters
@@ -238,7 +256,9 @@ class PhysicsLayer:
         ac_corrected = ac_raw * loss_factor * physics_derate
         
         if shading_penalty is not None:
-             ac_corrected = ac_corrected * (1.0 - shading_penalty)
+            # Element-wise: per-timestep shading (0-1) reduces only the timesteps
+            # where the obstacle actually casts a shadow on the array.
+            ac_corrected = ac_corrected * (1.0 - shading_penalty)
         
         # Ensure it's a Series (Total System Power)
         if isinstance(ac_corrected, pd.DataFrame):
@@ -257,15 +277,15 @@ class PhysicsLayer:
         # Degradation Loss
         deg_loss_val = (ac_raw * (1.0 - weather_df['degradation_factor'])).sum() / 1000.0 if 'degradation_factor' in weather_df.columns else 0
         
-        # Shading Loss
+        # Obstacle Shading Loss (per-timestep)
         shad_loss_val = 0
         if shading_penalty is not None:
-             shad_loss_val = (ac_raw * shading_penalty).sum() / 1000.0
+            shad_loss_val = (ac_raw * shading_penalty).sum() / 1000.0
              
         # Physics Loss (Wiring, LID, Mismatch)
         physics_loss_val = (ac_raw * (1.0 - physics_derate)).sum() / 1000.0
         
-        total_potential = annual_energy_kwh + soiling_loss_val + deg_loss_val + shad_loss_val + physics_loss_val
+        total_potential = annual_energy_kwh + soiling_loss_val + deg_loss_val + shad_loss_val + physics_loss_val + inverter_loss_val
         
         return {
             "annual_energy_kwh": annual_energy_kwh,
@@ -273,10 +293,12 @@ class PhysicsLayer:
             "ac_series": ac_corrected, # Keep as Series for internal API use
             "ac_list": ac_corrected.tolist(), # For JSON/JS
             "timestamps": ac_corrected.index.strftime('%Y-%m-%d %H:%M').tolist(),
+            "actual_inverter_efficiency": actual_inverter_efficiency,
             "losses": {
                 "soiling_percent": (soiling_loss_val / total_potential * 100) if total_potential > 0 else 0,
                 "shading_percent": (shad_loss_val / total_potential * 100) if total_potential > 0 else 0,
                 "degradation_percent": (deg_loss_val / total_potential * 100) if total_potential > 0 else 0,
-                "physics_derate_percent": (physics_loss_val / total_potential * 100) if total_potential > 0 else 0
+                "inverter_percent": (inverter_loss_val / total_potential * 100) if total_potential > 0 else 0,
+                "physics_derate_percent": (physics_loss_val / total_potential * 100) if total_potential > 0 else 0,
             }
         }

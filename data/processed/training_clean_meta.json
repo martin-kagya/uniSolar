@@ -1,0 +1,167 @@
+{
+  "total_records": 99542,
+  "total_stations": 23,
+  "stations": {
+    "TA00109": {
+      "latitude": 5.592651,
+      "longitude": -0.996417,
+      "country": "GH",
+      "records": 4184,
+      "is_validation": false
+    },
+    "TA00117": {
+      "latitude": 5.895083,
+      "longitude": 0.989567,
+      "country": "GH",
+      "records": 3799,
+      "is_validation": false
+    },
+    "TA00118": {
+      "latitude": 5.641413,
+      "longitude": -0.01187,
+      "country": "GH",
+      "records": 2929,
+      "is_validation": false
+    },
+    "TA00119": {
+      "latitude": 5.16120947,
+      "longitude": -2.641400593,
+      "country": "GH",
+      "records": 4116,
+      "is_validation": false
+    },
+    "TA00121": {
+      "latitude": 5.053207,
+      "longitude": -2.877294,
+      "country": "GH",
+      "records": 4051,
+      "is_validation": false
+    },
+    "TA00328": {
+      "latitude": 10.822359,
+      "longitude": -7.7394,
+      "country": "ML",
+      "records": 4255,
+      "is_validation": false
+    },
+    "TA00333": {
+      "latitude": 11.891441,
+      "longitude": -7.337038,
+      "country": "ML",
+      "records": 4278,
+      "is_validation": false
+    },
+    "TA00334": {
+      "latitude": 12.415836,
+      "longitude": -5.441847,
+      "country": "ML",
+      "records": 4140,
+      "is_validation": false
+    },
+    "TA00335": {
+      "latitude": 11.85276,
+      "longitude": -6.018243,
+      "country": "ML",
+      "records": 4161,
+      "is_validation": false
+    },
+    "TA00336": {
+      "latitude": 11.324207,
+      "longitude": -5.676385,
+      "country": "ML",
+      "records": 4187,
+      "is_validation": false
+    },
+    "TA00337": {
+      "latitude": 10.461182,
+      "longitude": -7.449116,
+      "country": "ML",
+      "records": 4209,
+      "is_validation": false
+    },
+    "TA00342": {
+      "latitude": 10.221683,
+      "longitude": 2.669973,
+      "country": "BJ",
+      "records": 3948,
+      "is_validation": false
+    },
+    "TA00343": {
+      "latitude": 13.25463414,
+      "longitude": -6.994592348,
+      "country": "ML",
+      "records": 4060,
+      "is_validation": false
+    },
+    "TA00344": {
+      "latitude": 12.79819407,
+      "longitude": -6.322762263,
+      "country": "ML",
+      "records": 4039,
+      "is_validation": false
+    },
+    "TA00346": {
+      "latitude": 13.696194,
+      "longitude": -6.058808,
+      "country": "ML",
+      "records": 4019,
+      "is_validation": false
+    },
+    "TA00348": {
+      "latitude": 13.252222,
+      "longitude": -5.957291,
+      "country": "ML",
+      "records": 3999,
+      "is_validation": false
+    },
+    "TA00349": {
+      "latitude": 14.49461,
+      "longitude": -4.188941,
+      "country": "ML",
+      "records": 3952,
+      "is_validation": false
+    },
+    "TA00350": {
+      "latitude": 12.657203,
+      "longitude": -7.921099,
+      "country": "ML",
+      "records": 3853,
+      "is_validation": false
+    },
+    "TA00365": {
+      "latitude": 12.920423,
+      "longitude": -7.5319189,
+      "country": "ML",
+      "records": 3755,
+      "is_validation": false
+    },
+    "TA00692": {
+      "latitude": 6.4041137,
+      "longitude": 5.6263074,
+      "country": "NG",
+      "records": 4159,
+      "is_validation": false
+    },
+    "TA00696": {
+      "latitude": 7.307635,
+      "longitude": 5.130365,
+      "country": "NG",
+      "records": 3799,
+      "is_validation": false
+    },
+    "navrongo_tier1": {
+      "latitude": 10.876,
+      "longitude": -1.063,
+      "country": "Ghana",
+      "records": 7657,
+      "is_validation": true
+    },
+    "sunyani_tier1": {
+      "latitude": 7.349,
+      "longitude": -2.34,
+      "country": "Ghana",
+      "records": 7993,
+      "is_validation": true
+    }
+  }
+}

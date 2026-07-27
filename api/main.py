@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from core.database import init_db, get_session, Location
+from core.database import init_db, get_session, Location, Design
 from core.layers.weather_model import WeatherCorrectionLayer
 from core.layers.environmental_model import EnvironmentalLayer
 from core.layers.physics_model import PhysicsLayer
@@ -97,20 +97,20 @@ class SimulationRequest(BaseModel):
     capacity_kw: float = 5.0
     tilt: float = 10.0
     azimuth: float = 180.0
-    azimuth: float = 180.0
+    gcr: float = 0.40
     module_name: str = None
     inverter_name: str = None
     year: int = 2023
     panels: list[Panel] = []
     features: list[RoofFeature] = []
     electricity_rate: float = 0.25
-    irradiance_bias: float = 1.0 # New tuning param
-    soiling_rate: float = 0.05   # New tuning param
-    system_cost_kw: float = 20000.0 # Standard GHS/kWp
-    om_cost_kw: float = 320.0       # Standard GHS/kWp
+    irradiance_bias: float = 1.0
+    soiling_rate: float = 0.05
+    system_cost_kw: float = 20000.0
+    om_cost_kw: float = 320.0
     
     # Advanced Physics Derates
-    mounting_type: str = 'open_rack' # or 'roof_mount'
+    mounting_type: str = 'open_rack'
     wiring_loss: float = 0.02
     lid_loss: float = 0.02
     mismatch_loss: float = 0.02
@@ -120,10 +120,16 @@ class SimulationRequest(BaseModel):
     tariff_escalation: float = 0.03
     om_escalation: float = 0.02
     degradation_rate: float = 0.005
+    lid_rate: float = 0.02
+    
+    # Debt / Equity Structure
+    debt_ratio: float = 0.65
+    interest_rate: float = 0.12
+    loan_term_years: int = 10
 
     # ECG Tariff Settings
     use_ecg_tariff: bool = True
-    customer_type: str = "residential"  # 'residential' or 'non_residential'
+    customer_type: str = "residential"
 
 class SizingRequest(BaseModel):
     latitude: float
@@ -146,6 +152,46 @@ async def read_dashboard(request: Request):
         "request": request, 
         "google_maps_api_key": os.getenv("GOOGLE_MAPS_API_KEY", "")
     })
+
+def _safe_pm_mean(df, col):
+    """Return mean PM value only if data is real (non-defaulted); None otherwise."""
+    if col not in df.columns:
+        return None
+    vals = df[col].dropna()
+    if len(vals) == 0:
+        return None
+    mean_val = float(vals.mean())
+    # NASA POWER doesn't provide PM data; _build_features defaults pm25 to 25.0 then fillna(0.0)
+    # A real measurement would have variance; a flat 0.0 or exactly 25.0 means defaulted
+    if mean_val == 0.0:
+        return None
+    return mean_val
+
+def _count_rain_events(df):
+    """Count distinct rain events (consecutive hours with rain > 0.5mm = 1 event), return monthly rate."""
+    if 'rain_mm' not in df.columns:
+        return 0.0
+    rain = df['rain_mm'].dropna()
+    if len(rain) == 0:
+        return 0.0
+    is_raining = (rain > 0.5).astype(int)
+    # Count transitions: an event starts when is_raining goes from 0→1
+    transitions = is_raining.diff().fillna(0)
+    event_starts = (transitions == 1).sum()
+    # Also count if the first hour is raining (that's an event start)
+    if is_raining.iloc[0] == 1:
+        event_starts += 1
+    total_events = max(int(event_starts), 0)
+    # Determine time span in months from the index
+    if hasattr(df.index, 'to_series'):
+        try:
+            span = (df.index.max() - df.index.min())
+            months = max(span.days / 30.44, 1.0)
+        except Exception:
+            months = 12.0
+    else:
+        months = 12.0
+    return round(total_events / months, 1)
 
 @app.post("/simulate")
 def run_simulation(req: SimulationRequest):
@@ -209,7 +255,6 @@ def run_simulation(req: SimulationRequest):
             [p.dict() for p in req.panels], 
             [f.dict() for f in req.features]
         )
-        shading_penalty = shading_series.mean()
         # Apply Tuning Bias to Irradiance
         if req.irradiance_bias != 1.0:
             if 'ghi_corrected' in df_l2.columns:
@@ -220,6 +265,8 @@ def run_simulation(req: SimulationRequest):
                 df_l2['dhi_satellite'] *= req.irradiance_bias
 
         # 6. Layer 3: Physics
+        # Align shading_series index with df_l2 for element-wise multiplication
+        shading_aligned = shading_series.reindex(df_l2.index, method='ffill').fillna(0.0)
         result = physics_layer.simulate(
             df_l2, 
             req.latitude, 
@@ -227,9 +274,10 @@ def run_simulation(req: SimulationRequest):
             req.capacity_kw, 
             req.tilt, 
             req.azimuth,
+            gcr=req.gcr,
             module_name=req.module_name,
             inverter_name=req.inverter_name,
-            shading_penalty=shading_penalty,
+            shading_penalty=shading_aligned,
             mounting_type=req.mounting_type,
             wiring_loss=req.wiring_loss,
             lid_loss=req.lid_loss,
@@ -246,36 +294,68 @@ def run_simulation(req: SimulationRequest):
             tariff_escalation_rate=req.tariff_escalation,
             om_escalation_rate=req.om_escalation,
             degradation_rate=req.degradation_rate,
+            lid_rate=req.lid_rate,
+            debt_ratio=req.debt_ratio,
+            interest_rate=req.interest_rate,
+            loan_term_years=req.loan_term_years,
             use_ecg_tariff=req.use_ecg_tariff,
             customer_type=req.customer_type,
         )
         financials = fin_layer.calculate_roi(result['annual_energy_kwh'], req.capacity_kw)
         
-        # 8. Monte Carlo Layer (Probabilistic Yield Analysis)
-        # We perform a stochastic simulation (1,000 runs) to determine P50/P90 risk metrics.
-        # This accounts for meteorological variability and equipment uncertainty.
+        # 8. Monte Carlo Layer (Probabilistic Yield + Financial Risk Analysis)
+        # 1,000 runs to determine P50/P90 yield AND NPV risk metrics.
+        # Uncertainties model real-world variance in the West African context.
         mc_iterations = 1000
-        # Uncertainty standard deviations for the West African context
-        irradiance_std = 0.05  # 5% inter-annual solar variation
-        soiling_std = 0.12     # 12% uncertainty in Harmattan deposition rates
-        hardware_std = 0.03    # 3% tolerance in manufacturer specs/wiring
+        # Yield uncertainties
+        irradiance_std = 0.05   # 5% inter-annual solar variation
+        soiling_std = 0.12      # 12% uncertainty in Harmattan deposition rates
+        hardware_std = 0.03     # 3% tolerance in manufacturer specs/wiring
+        # Financial / operational uncertainties
+        tariff_std = 0.15       # 15% — ECG tariffs are politically regulated, can jump
+        degradation_std = 0.002 # ±0.2% absolute on the 0.5%/yr assumption
+        grid_std = 0.05         # 5% — Ghana grid outages reduce export/consumption
         
         base_yield = result['annual_energy_kwh']
         stochastic_yields = []
+        stochastic_npvs = []
         
         for _ in range(mc_iterations):
-            # Sample from Normal distributions centered at 100%
+            # Yield uncertainties (multiplicative on energy)
             s_irrad = np.random.normal(1.0, irradiance_std)
             s_soil = np.random.normal(1.0, soiling_std)
             s_hard = np.random.normal(1.0, hardware_std)
+            s_grid = np.random.normal(1.0, grid_std)
             
-            # Stochastic Result = Base Yield scaled by combined uncertainties
-            s_yield = base_yield * s_irrad * s_soil * s_hard
+            s_yield = base_yield * s_irrad * s_soil * s_hard * s_grid
             stochastic_yields.append(s_yield)
             
+            # Financial uncertainty: perturb tariff escalation + degradation
+            s_tariff_esc = np.random.normal(req.tariff_escalation, tariff_std * req.tariff_escalation)
+            s_deg = max(0, req.degradation_rate + np.random.normal(0, degradation_std))
+            
+            fin_stochastic = FinancialLayer(
+                electricity_tariff=req.electricity_rate,
+                system_cost_per_kw=req.system_cost_kw,
+                annual_om_cost=req.om_cost_kw,
+                tariff_escalation_rate=s_tariff_esc,
+                om_escalation_rate=req.om_escalation,
+                degradation_rate=s_deg,
+                lid_rate=req.lid_rate,
+                debt_ratio=req.debt_ratio,
+                interest_rate=req.interest_rate,
+                loan_term_years=req.loan_term_years,
+                use_ecg_tariff=req.use_ecg_tariff,
+                customer_type=req.customer_type,
+            )
+            s_financials = fin_stochastic.calculate_roi(s_yield, req.capacity_kw)
+            stochastic_npvs.append(s_financials['npv'])
+            
         # Probabilistic Metrics
-        p50_yield = np.percentile(stochastic_yields, 50)
-        p90_yield = np.percentile(stochastic_yields, 10) # Value exceeded 90% of the time
+        p50_yield = float(np.percentile(stochastic_yields, 50))
+        p90_yield = float(np.percentile(stochastic_yields, 10))
+        p50_npv = float(np.percentile(stochastic_npvs, 50))
+        p90_npv = float(np.percentile(stochastic_npvs, 10))
         
         # Build Distribution Histogram for UI
         hist_counts, hist_bins = np.histogram(stochastic_yields, bins=25)
@@ -308,16 +388,31 @@ def run_simulation(req: SimulationRequest):
             "config": req.dict(),
             "results": result,
             "financials": financials,
+            "loss_params": {
+                "degradation_rate_pct": req.degradation_rate * 100,
+                "lid_rate_pct": req.lid_rate * 100,
+                "soiling_rate_pct": req.soiling_rate * 100,
+                "wiring_loss_pct": req.wiring_loss * 100,
+                "lid_loss_pct": req.lid_loss * 100,
+                "mismatch_loss_pct": req.mismatch_loss * 100,
+                "inverter_efficiency_pct": req.inverter_efficiency * 100,
+                "actual_inverter_efficiency_pct": result.get('actual_inverter_efficiency', req.inverter_efficiency) * 100,
+                "irradiance_bias": req.irradiance_bias,
+                "gcr": req.gcr,
+            },
             "hourly_curve": hourly_curves,
             "probabilistic_results": {
                 "p50_yield": p50_yield,
                 "p90_yield": p90_yield,
+                "p50_npv": p50_npv,
+                "p90_npv": p90_npv,
                 "distribution": prob_distribution
             },
             "environmental_metrics": {
-                "mean_pm25": float(df_l2['pm25'].mean()) if 'pm25' in df_l2.columns else 0.0,
-                "mean_pm10": float(df_l2['pm10'].mean()) if 'pm10' in df_l2.columns else 0.0,
-                "mean_cleaning_events_monthly": float(df_l2[df_l2['rain_mm'] > 0.5].shape[0] / 12) if 'rain_mm' in df_l2.columns else 0.0
+                "mean_pm25": _safe_pm_mean(df_l2, 'pm25'),
+                "mean_pm10": _safe_pm_mean(df_l2, 'pm10'),
+                "mean_cleaning_events_monthly": _count_rain_events(df_l2),
+                "pm_data_available": False  # NASA POWER does not provide PM2.5/PM10
             }
         })
 
@@ -620,6 +715,141 @@ def size_system(req: SizingRequest):
             "tariff_source": "ECG May 2025 Reckoner",
         }
     }
+
+# ---- Design Save/Load endpoints --------------------------------------------
+
+class DesignSaveRequest(BaseModel):
+    name: str
+    latitude: float
+    longitude: float
+    map_zoom: float = 18
+    config_json: dict
+    polygon_areas_json: list
+    obstacles_json: list = []
+    panel_config_json: dict
+    electrical_json: dict
+    placed_panels_json: list | None = None
+
+@app.get("/designs")
+def list_designs():
+    engine = init_db()
+    session = get_session(engine)
+    try:
+        designs = session.query(Design).order_by(Design.updated_at.desc()).all()
+        return [
+            {
+                "id": d.id,
+                "name": d.name,
+                "latitude": d.latitude,
+                "longitude": d.longitude,
+                "created_at": d.created_at.isoformat() if d.created_at else None,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                "panel_count": len(d.placed_panels_json) if d.placed_panels_json else 0,
+            }
+            for d in designs
+        ]
+    finally:
+        session.close()
+
+@app.post("/designs")
+def save_design(req: DesignSaveRequest):
+    engine = init_db()
+    session = get_session(engine)
+    try:
+        import json
+        design = Design(
+            name=req.name,
+            latitude=req.latitude,
+            longitude=req.longitude,
+            map_zoom=req.map_zoom,
+            config_json=json.dumps(req.config_json),
+            polygon_areas_json=json.dumps(req.polygon_areas_json),
+            obstacles_json=json.dumps(req.obstacles_json),
+            panel_config_json=json.dumps(req.panel_config_json),
+            electrical_json=json.dumps(req.electrical_json),
+            placed_panels_json=json.dumps(req.placed_panels_json) if req.placed_panels_json else None,
+        )
+        session.add(design)
+        session.commit()
+        session.refresh(design)
+        return {"id": design.id, "name": design.name, "status": "saved"}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+@app.get("/designs/{design_id}")
+def load_design(design_id: int):
+    engine = init_db()
+    session = get_session(engine)
+    try:
+        import json
+        design = session.query(Design).filter(Design.id == design_id).first()
+        if not design:
+            raise HTTPException(status_code=404, detail="Design not found")
+        return {
+            "id": design.id,
+            "name": design.name,
+            "latitude": design.latitude,
+            "longitude": design.longitude,
+            "map_zoom": design.map_zoom,
+            "config_json": json.loads(design.config_json),
+            "polygon_areas_json": json.loads(design.polygon_areas_json),
+            "obstacles_json": json.loads(design.obstacles_json),
+            "panel_config_json": json.loads(design.panel_config_json),
+            "electrical_json": json.loads(design.electrical_json),
+            "placed_panels_json": json.loads(design.placed_panels_json) if design.placed_panels_json else None,
+            "created_at": design.created_at.isoformat() if design.created_at else None,
+            "updated_at": design.updated_at.isoformat() if design.updated_at else None,
+        }
+    finally:
+        session.close()
+
+@app.put("/designs/{design_id}")
+def update_design(design_id: int, req: DesignSaveRequest):
+    engine = init_db()
+    session = get_session(engine)
+    try:
+        import json
+        design = session.query(Design).filter(Design.id == design_id).first()
+        if not design:
+            raise HTTPException(status_code=404, detail="Design not found")
+        design.name = req.name
+        design.latitude = req.latitude
+        design.longitude = req.longitude
+        design.map_zoom = req.map_zoom
+        design.config_json = json.dumps(req.config_json)
+        design.polygon_areas_json = json.dumps(req.polygon_areas_json)
+        design.obstacles_json = json.dumps(req.obstacles_json)
+        design.panel_config_json = json.dumps(req.panel_config_json)
+        design.electrical_json = json.dumps(req.electrical_json)
+        design.placed_panels_json = json.dumps(req.placed_panels_json) if req.placed_panels_json else None
+        design.updated_at = datetime.utcnow()
+        session.commit()
+        return {"id": design.id, "name": design.name, "status": "updated"}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
+
+@app.delete("/designs/{design_id}")
+def delete_design(design_id: int):
+    engine = init_db()
+    session = get_session(engine)
+    try:
+        design = session.query(Design).filter(Design.id == design_id).first()
+        if not design:
+            raise HTTPException(status_code=404, detail="Design not found")
+        session.delete(design)
+        session.commit()
+        return {"status": "deleted"}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 # Mount static files (HTML=False so we serve index via template)
 app.mount("/", StaticFiles(directory="static", html=False), name="static")

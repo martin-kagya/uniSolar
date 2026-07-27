@@ -8,24 +8,36 @@ export default function AddressSearch({ onSelectLocation }) {
     const [isOpen, setIsOpen] = useState(false);
     const dropdownRef = useRef(null);
     const timeoutRef = useRef(null);
+    const abortRef = useRef(null);
 
-    // Fetch suggestions from Nominatim (OpenStreetMap)
-    const fetchSuggestions = async (searchText) => {
-        if (searchText.length < 3) {
+    const fetchSuggestions = async (text) => {
+        if (text.length < 2) {
             setSuggestions([]);
+            setIsOpen(false);
             return;
         }
 
+        if (abortRef.current) abortRef.current.abort();
+        const controller = new AbortController();
+        abortRef.current = controller;
+
         setLoading(true);
         try {
-            const response = await fetch(
-                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchText)}&addressdetails=1&limit=5`
+            const res = await fetch(
+                `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(text)}&addressdetails=1&limit=5&countrycodes=gh`,
+                { signal: controller.signal }
             );
-            const data = await response.json();
-            setSuggestions(data);
+            const data = await res.json();
+            setSuggestions(data.map(p => ({
+                id: p.place_id,
+                primary: p.display_name.split(',')[0],
+                secondary: p.display_name.split(',').slice(1).join(',').trim(),
+                fullText: p.display_name,
+                raw: p,
+            })));
             setIsOpen(data.length > 0);
-        } catch (error) {
-            console.error('Autocomplete error:', error);
+        } catch (e) {
+            if (e.name !== 'AbortError') console.error('Autocomplete error:', e);
         } finally {
             setLoading(false);
         }
@@ -36,24 +48,20 @@ export default function AddressSearch({ onSelectLocation }) {
         setQuery(value);
 
         if (timeoutRef.current) clearTimeout(timeoutRef.current);
-
-        timeoutRef.current = setTimeout(() => {
-            fetchSuggestions(value);
-        }, 300);
+        timeoutRef.current = setTimeout(() => fetchSuggestions(value), 180);
     };
 
-    const handleSelect = (place) => {
-        setQuery(place.display_name);
+    const handleSelect = (suggestion) => {
+        setQuery(suggestion.fullText);
         setSuggestions([]);
         setIsOpen(false);
         onSelectLocation({
-            lat: parseFloat(place.lat),
-            lng: parseFloat(place.lon),
-            name: place.display_name
+            lat: parseFloat(suggestion.raw.lat),
+            lng: parseFloat(suggestion.raw.lon),
+            name: suggestion.fullText,
         });
     };
 
-    // Close dropdown on click outside
     useEffect(() => {
         const handleClickOutside = (event) => {
             if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
@@ -65,38 +73,38 @@ export default function AddressSearch({ onSelectLocation }) {
     }, []);
 
     return (
-        <div className="relative w-80" ref={dropdownRef}>
-            <div className="flex items-center bg-glass-bg rounded-lg px-4 py-2 w-full border border-border-theme focus-within:border-brand-gold/30 transition-all">
+        <div className="relative w-56" ref={dropdownRef}>
+            <div className="flex items-center bg-glass-bg rounded-lg px-2.5 py-1.5 w-full border border-border-theme focus-within:border-brand-gold/30 transition-all">
                 {loading ? (
-                    <Loader2 className="w-4 h-4 text-brand-gold animate-spin mr-2" />
+                    <Loader2 className="w-3.5 h-3.5 text-brand-gold animate-spin mr-1.5" />
                 ) : (
-                    <Search className="w-4 h-4 text-text-dim mr-2" />
+                    <Search className="w-3.5 h-3.5 text-text-dim mr-1.5" />
                 )}
                 <input
                     type="text"
                     value={query}
                     onChange={handleInputChange}
-                    onFocus={() => query.length >= 3 && setIsOpen(true)}
+                    onFocus={() => suggestions.length > 0 && setIsOpen(true)}
                     placeholder="Search location..."
-                    className="bg-transparent border-none outline-none text-sm w-full text-text-primary placeholder:text-text-dim font-medium"
+                    className="bg-transparent border-none outline-none text-xs w-full text-text-primary placeholder:text-text-dim font-medium"
                 />
             </div>
 
             {isOpen && suggestions.length > 0 && (
                 <div className="absolute top-full left-0 right-0 mt-2 bg-surface-dropdown rounded-xl border border-border-theme shadow-2xl overflow-hidden z-[100] backdrop-blur-xl">
-                    {suggestions.map((place) => (
+                    {suggestions.map((s) => (
                         <div
-                            key={place.place_id}
-                            onClick={() => handleSelect(place)}
+                            key={s.id}
+                            onClick={() => handleSelect(s)}
                             className="px-4 py-3 hover:bg-glass-bg cursor-pointer flex items-start gap-3 transition-colors group"
                         >
                             <MapPin className="w-4 h-4 text-text-dim mt-0.5 group-hover:text-brand-gold transition-colors" />
                             <div className="flex flex-col gap-0.5">
                                 <span className="text-xs text-text-primary font-medium line-clamp-1">
-                                    {place.display_name.split(',')[0]}
+                                    {s.primary}
                                 </span>
                                 <span className="text-[10px] text-text-dim line-clamp-1">
-                                    {place.display_name.split(',').slice(1).join(',').trim()}
+                                    {s.secondary}
                                 </span>
                             </div>
                         </div>

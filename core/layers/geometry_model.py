@@ -1,44 +1,66 @@
+import math
 import pandas as pd
 import numpy as np
 import pvlib
 from pvlib import shading
+
+
+def compute_row_pitch(collector_width: float, tilt_deg: float, gcr: float) -> float:
+    """Row pitch (center-to-center row spacing along the ground).
+
+    Must match frontend ``lib/panelGeometry.ts`` ``rowPitch()`` exactly.
+
+    Args:
+        collector_width: Module length along the tilt axis (metres).
+        tilt_deg: System tilt from horizontal (degrees).
+        gcr: Ground Coverage Ratio (0, 1].
+
+    Returns:
+        Row pitch in metres.
+    """
+    if gcr <= 0 or gcr > 1:
+        raise ValueError(f"gcr must be in (0, 1], got {gcr}")
+    projected = collector_width * math.cos(math.radians(tilt_deg))
+    return projected / gcr
+
 
 class GeometryLayer:
     """
     Layer 0 (Spatial): Defines physical scene and calculates shading.
     Uses PVLib's infinite row shading models.
     """
-    
+
     def __init__(self, surface_tilt=10, surface_azimuth=180, gcr=0.4):
         """
-        :param gcr: Ground Coverage Ratio (0.0 to 1.0). 
+        :param gcr: Ground Coverage Ratio (0.0 to 1.0).
                    Lower GCR means rows are further apart.
         """
         self.surface_tilt = surface_tilt
         self.surface_azimuth = surface_azimuth
-        self.gcr = gcr # Ratio of row-length to pitch
-        self.collector_width = 1.0 # Standard panel width in meters (portrait)
+        self.gcr = gcr
+        self.collector_width = 1.0  # Module length along tilt axis (portrait)
 
     def calculate_shading(self, solar_zenith, solar_azimuth):
         """
         Calculates the shaded fraction for one-dimensional rows.
+        Uses pvlib.shading.shaded_fraction1d for fixed-tilt arrays.
         """
-        # pitch = axis-to-axis distance
-        # pitch = row_slant_length / GCR
-        pitch = self.collector_width / self.gcr
-        
-        # PVLib shading function
-        # shaded_fraction1d returns 0.0 (no shade) to 1.0 (full shade)
+        pitch = compute_row_pitch(self.collector_width, self.surface_tilt, self.gcr)
+
+        # For fixed-tilt: axis runs perpendicular to panel azimuth (east-west for south-facing)
+        # axis_azimuth = surface_azimuth - 90 (perpendicular to the panel face direction)
+        axis_azimuth = (self.surface_azimuth - 90) % 360
+
         f_shaded = shading.shaded_fraction1d(
             solar_zenith,
             solar_azimuth,
-            self.surface_tilt,
-            self.surface_azimuth,
-            pitch,
-            self.collector_width,
-            max_shaded_fraction=1.0
+            axis_azimuth=axis_azimuth,
+            shaded_row_rotation=self.surface_tilt,
+            collector_width=self.collector_width,
+            pitch=pitch,
+            axis_tilt=0,
         )
-        
+
         return f_shaded.fillna(0)
 
     def calculate_obstacle_shading(self, solar_zenith, solar_azimuth, panels, features):
@@ -112,9 +134,9 @@ class GeometryLayer:
                 obs_width = f['width']
                 obs_type = f['type']
                 
-                # Shadow length capping (Strictly matching frontend realism)
+                # Shadow length capping (Matching frontend: h × 4 cap with cosine fade)
                 actual_slen = s_len * h
-                max_len = h * 12.0
+                max_len = h * 4.0
                 if actual_slen > max_len:
                     actual_slen = max_len
                 

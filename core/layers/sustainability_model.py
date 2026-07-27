@@ -6,9 +6,10 @@ class SustainabilityLayer:
     Calculates carbon avoidance and equivalent green metrics.
     """
     
-    def __init__(self, grid_emission_factor=0.35):
+    def __init__(self, grid_emission_factor=0.54):
         """
-        :param grid_emission_factor: kg CO2 per kWh (Ghana Grid Default: 0.35)
+        :param grid_emission_factor: kg CO2 per kWh (Ghana Grid Default: 0.54)
+                                     Source: Our World in Data 2023 (540 gCO₂eq/kWh)
         """
         self.grid_emission_factor = grid_emission_factor
         # Sources for equivalents: EPA Greenhouse Gas Equivalencies Calculator
