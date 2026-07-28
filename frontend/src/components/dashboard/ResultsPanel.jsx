@@ -103,7 +103,7 @@ export default function ResultsPanel({ results, isVisible, onViewReport }) {
                     </div>
                 </div>
 
-                {/* P50 / P90 badges */}
+                {/* P50 / P90 / P99 badges */}
                 {results.probabilisticResults && (
                     <div className="flex gap-2 mt-3">
                         <div className="px-2 py-1 bg-glass-bg border border-border-theme rounded-lg flex-1">
@@ -118,6 +118,14 @@ export default function ResultsPanel({ results, isVisible, onViewReport }) {
                                 {(results.probabilisticResults.p90_yield / 1000).toFixed(1)} <span className="text-[8px] text-emerald-500/60">MWh</span>
                             </p>
                         </div>
+                        {results.probabilisticResults.p99_yield != null && (
+                            <div className="px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded-lg flex-1">
+                                <p className="text-[8px] font-bold text-amber-500 uppercase">P99 Worst</p>
+                                <p className="text-xs font-bold text-text-primary">
+                                    {(results.probabilisticResults.p99_yield / 1000).toFixed(1)} <span className="text-[8px] text-amber-500/60">MWh</span>
+                                </p>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>

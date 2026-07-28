@@ -181,7 +181,7 @@ export default function ReportModal({ isOpen, onClose, results }) {
                                                         <TrendingUp className="w-4 h-4 text-emerald-400" />
                                                         Yield Probability Distribution
                                                     </h3>
-                                                    <p className="text-xs text-text-dim">1,000 Monte Carlo runs — combined uncertainty: irradiance ±5%, soiling ±12%, hardware ±3%</p>
+                                                    <p className="text-xs text-text-dim">1,000 Monte Carlo runs — calibrated resource uncertainty combined with soiling, hardware, tariff & grid risk</p>
                                                 </div>
                                                 <div className="flex gap-2">
                                                     <div className="px-2 py-1 bg-glass-bg border border-border-theme rounded-lg">
@@ -198,6 +198,15 @@ export default function ReportModal({ isOpen, onClose, results }) {
                                                             <p className="text-[8px] text-text-dim">NPV: ₵{Math.round(results.probabilisticResults.p90_npv).toLocaleString()}</p>
                                                         )}
                                                     </div>
+                                                    {results.probabilisticResults.p99_yield != null && (
+                                                        <div className="px-2 py-1 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                                                            <p className="text-[8px] font-bold text-amber-500 uppercase">P99 (Worst-case)</p>
+                                                            <p className="text-xs font-bold text-text-primary">{formatEnergy(results.probabilisticResults.p99_yield)}</p>
+                                                            {results.probabilisticResults.p99_npv != null && (
+                                                                <p className="text-[8px] text-text-dim">NPV: ₵{Math.round(results.probabilisticResults.p99_npv).toLocaleString()}</p>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                 </div>
                                             </div>
                                             <div className="h-64 w-full">
@@ -227,6 +236,40 @@ export default function ReportModal({ isOpen, onClose, results }) {
                                                     </AreaChart>
                                                 </ResponsiveContainer>
                                             </div>
+
+                                            {/* ML-B: calibrated resource exceedance + validation */}
+                                            {results.probabilisticResults.energy_p90_kwh != null && (
+                                                <div className="pt-4 border-t border-border-subtle space-y-3">
+                                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                                        <h4 className="text-xs font-bold text-text-primary flex items-center gap-2">
+                                                            <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                                                            Calibrated Resource Exceedance (ML)
+                                                        </h4>
+                                                        {results.probabilisticResults.p90_calibration?.['0.90'] != null && (
+                                                            <span className="px-2 py-0.5 text-[9px] font-bold text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+                                                                P90 validated: {(results.probabilisticResults.p90_calibration['0.90'] * 100).toFixed(1)}% empirical coverage
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="grid grid-cols-3 gap-2">
+                                                        {[['P50', 'energy_p50_kwh', 'text-text-primary'], ['P90', 'energy_p90_kwh', 'text-emerald-400'], ['P99', 'energy_p99_kwh', 'text-amber-400']].map(([lbl, key, color]) => (
+                                                            <div key={lbl} className="px-2 py-1.5 bg-glass-bg border border-border-theme rounded-lg text-center">
+                                                                <p className={`text-[8px] font-bold uppercase ${color}`}>{lbl} energy</p>
+                                                                <p className="text-xs font-bold text-text-primary">{formatEnergy(results.probabilisticResults[key])}</p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    {results.probabilisticResults.uncertainty_breakdown && (
+                                                        <p className="text-[9px] text-text-dim leading-relaxed">
+                                                            Uncertainty budget: model {(results.probabilisticResults.uncertainty_breakdown.model_cov * 100).toFixed(1)}%
+                                                            ⊕ interannual {(results.probabilisticResults.uncertainty_breakdown.interannual_cov * 100).toFixed(1)}%
+                                                            = {(results.probabilisticResults.uncertainty_breakdown.total_cov * 100).toFixed(1)}% (quadrature).
+                                                            P90/P50 = {(results.probabilisticResults.uncertainty_breakdown.p90_over_p50 * 100).toFixed(1)}%.
+                                                            Regime-conditional conformal intervals, validated leave-one-station-out.
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     )}
 
@@ -375,10 +418,11 @@ export default function ReportModal({ isOpen, onClose, results }) {
                                         })()}
 
                                         <p className="text-[9px] text-text-dim mt-4 leading-relaxed">
-                                            Monte Carlo P50/P90 spread reflects combined uncertainty from inter-annual irradiance variability (±5%),
-                                            Harmattan soiling deposition (±12%), hardware tolerance (±3%), tariff regulation risk (±15%),
-                                            degradation variance (±0.2%/yr), and grid availability (±5%). P90 represents the yield exceeded
-                                            90% of simulated years — suitable for bankable yield estimates per IEC 61724 methodology.
+                                            The resource uncertainty is <span className="font-semibold">calibrated</span>, not assumed: regime-conditional
+                                            conformal intervals validated leave-one-station-out on Tier-1 pyranometers (P90 empirical coverage ≈ 90%).
+                                            The Monte Carlo P50/P90/P99 spread combines this calibrated resource+model term with Harmattan soiling (±12%),
+                                            hardware tolerance (±3%), tariff regulation risk (±15%), degradation variance (±0.2%/yr) and grid availability (±5%).
+                                            P90 = yield exceeded in 90% of years (bankable, per IEC 61724); P99 = worst-case downside.
                                         </p>
                                     </div>
                                 </>

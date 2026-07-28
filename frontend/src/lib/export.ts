@@ -67,8 +67,20 @@ export interface ReportData {
   probabilisticResults?: {
     p50_yield?: number;
     p90_yield?: number;
+    p99_yield?: number;
     p50_npv?: number;
     p90_npv?: number;
+    p99_npv?: number;
+    energy_p50_kwh?: number;
+    energy_p90_kwh?: number;
+    energy_p99_kwh?: number;
+    uncertainty_breakdown?: {
+      model_cov?: number;
+      interannual_cov?: number;
+      total_cov?: number;
+      p90_over_p50?: number;
+    };
+    p90_calibration?: Record<string, number>;
   };
 }
 
@@ -181,22 +193,38 @@ export async function generateReportPDF(data: ReportData, filename = 'UniSolar_R
     pdf.text('Yield Probability Distribution (1,000 Monte Carlo runs)', LM, y);
     y += 5;
     const bx = LM;
-    const bw = 55;
+    const bw = 52;
+    const gap = 5;
     // P50
     pdf.setFillColor(240, 240, 240);
     pdf.roundedRect(bx, y, bw, 10, 1.5, 1.5, 'F');
     subLabel('P50 (Expected)', formatEnergy(pr.p50_yield), bx + 3, bw - 6);
     // P90
     pdf.setFillColor(232, 252, 244);
-    pdf.roundedRect(bx + bw + 6, y, bw, 10, 1.5, 1.5, 'F');
-    subLabel('P90 (Bankable)', formatEnergy(pr.p90_yield), bx + bw + 9, bw - 6);
+    pdf.roundedRect(bx + bw + gap, y, bw, 10, 1.5, 1.5, 'F');
+    subLabel('P90 (Bankable)', formatEnergy(pr.p90_yield), bx + bw + gap + 3, bw - 6);
+    // P99
+    if (pr.p99_yield != null) {
+      pdf.setFillColor(254, 249, 231);
+      pdf.roundedRect(bx + 2 * (bw + gap), y, bw, 10, 1.5, 1.5, 'F');
+      subLabel('P99 (Worst-case)', formatEnergy(pr.p99_yield), bx + 2 * (bw + gap) + 3, bw - 6);
+    }
     // NPV annotations
     y += 13;
     pdf.setFontSize(7);
     pdf.setTextColor(...DIM);
     if (pr.p50_npv != null) pdf.text(`P50 NPV: ${formatGHS(pr.p50_npv)}`, bx + 3, y);
-    if (pr.p90_npv != null) pdf.text(`P90 NPV: ${formatGHS(pr.p90_npv)}`, bx + bw + 9, y);
+    if (pr.p90_npv != null) pdf.text(`P90 NPV: ${formatGHS(pr.p90_npv)}`, bx + bw + gap + 3, y);
+    if (pr.p99_npv != null) pdf.text(`P99 NPV: ${formatGHS(pr.p99_npv)}`, bx + 2 * (bw + gap) + 3, y);
     y += 6;
+    // Calibration provenance (the defensible bit)
+    const cov = pr.p90_calibration?.['0.90'];
+    if (cov != null) {
+      pdf.setFontSize(7);
+      pdf.setTextColor(...DIM);
+      pdf.text(`Resource P90 calibrated: ${(cov * 100).toFixed(1)}% empirical coverage (conformal, leave-one-station-out).`, bx, y);
+      y += 6;
+    }
   }
 
   // Monthly Yield Bar Chart
@@ -594,7 +622,7 @@ export async function generateReportPDF(data: ReportData, filename = 'UniSolar_R
   pdf.setFontSize(7);
   pdf.setTextColor(...DARK);
   pdf.setFont('helvetica', 'normal');
-  const discText = 'Monte Carlo P50/P90 spread reflects combined uncertainty from inter-annual irradiance variability (\u00B15%), Harmattan soiling deposition (\u00B112%), hardware tolerance (\u00B13%), tariff regulation risk (\u00B115%), degradation variance (\u00B10.2%/yr), and grid availability (\u00B15%). P90 represents the yield exceeded 90% of simulated years \u2014 suitable for bankable yield estimates per IEC 61724 methodology.';
+  const discText = 'Resource uncertainty is calibrated, not assumed: regime-conditional conformal intervals validated leave-one-station-out on Tier-1 pyranometers (P90 empirical coverage \u2248 90%). The Monte Carlo P50/P90/P99 spread combines this calibrated resource+model term with Harmattan soiling (\u00B112%), hardware tolerance (\u00B13%), tariff regulation risk (\u00B115%), degradation variance (\u00B10.2%/yr), and grid availability (\u00B15%). P90 = yield exceeded in 90% of years (bankable, per IEC 61724); P99 = worst-case downside.';
   pdf.text(discText, LM, y, { maxWidth: CW });
   y += 18;
 

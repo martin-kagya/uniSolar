@@ -362,8 +362,10 @@ def run_simulation(req: SimulationRequest):
         # Probabilistic Metrics
         p50_yield = float(np.percentile(stochastic_yields, 50))
         p90_yield = float(np.percentile(stochastic_yields, 10))
+        p99_yield = float(np.percentile(stochastic_yields, 1))
         p50_npv = float(np.percentile(stochastic_npvs, 50))
         p90_npv = float(np.percentile(stochastic_npvs, 10))
+        p99_npv = float(np.percentile(stochastic_npvs, 1))
         
         # Build Distribution Histogram for UI
         hist_counts, hist_bins = np.histogram(stochastic_yields, bins=25)
@@ -412,8 +414,10 @@ def run_simulation(req: SimulationRequest):
             "probabilistic_results": {
                 "p50_yield": p50_yield,
                 "p90_yield": p90_yield,
+                "p99_yield": p99_yield,
                 "p50_npv": p50_npv,
                 "p90_npv": p90_npv,
+                "p99_npv": p99_npv,
                 "distribution": prob_distribution,
                 # ML-B calibrated analytic energy percentiles (bankable, auditable)
                 "energy_p50_kwh": energy_px["p50"],
