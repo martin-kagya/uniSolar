@@ -58,7 +58,9 @@ class PhysicsLayer:
         sim_weather = pd.DataFrame(index=weather_df.index)
         sim_weather['ghi'] = weather_df['ghi_corrected']
         sim_weather['dni'] = weather_df['dni_corrected']
-        sim_weather['dhi'] = weather_df['dhi_satellite'] 
+        # ML-A: consistent diffuse from the separation model; fall back to raw satellite.
+        sim_weather['dhi'] = weather_df['dhi_corrected'] if 'dhi_corrected' in weather_df.columns \
+            else weather_df['dhi_satellite']
         sim_weather['temp_air'] = weather_df['temp_air'].fillna(25)
         sim_weather['wind_speed'] = weather_df['wind_speed'].fillna(2)
         

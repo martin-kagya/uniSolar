@@ -103,7 +103,20 @@ class WeatherCorrectionLayer:
             'solar_zenith', 'solar_elevation', 'clear_sky_ghi',
         ]
         self._lstm_seq_len = 4
-        
+
+        # ML-A separation model (re-splits accurate GHI into consistent DNI/DHI).
+        # Fixes NASA POWER's broken decomposition (raw components underestimate POA
+        # by ~40 W/m². DIRINT is the physical fallback when the model is unavailable.
+        self.use_ml_separation = True
+        # GHI ratio correction is OFF by default: satellite GHI is already unbiased vs
+        # Tier-1 (bias +1 W/m², 0% correctable); the ratio model fits ZINDI sensor bias
+        # and drags accurate GHI ~10% low. The separation split anchors on satellite GHI.
+        self.use_ghi_ratio_correction = False
+        self.separation_path = 'core/models/separation_ml.pkl'
+        self._sep_model = None
+        self._sep_features = None
+        self._sep_loaded = False
+
         # Load CAMS PM2.5 reanalysis for prediction look-up
         self._cams_pm25 = None
         cams_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -426,8 +439,14 @@ class WeatherCorrectionLayer:
                     self._base_models_ghi[mt] = joblib.load(gh)
                 if os.path.exists(dn):
                     self._base_models_dni[mt] = joblib.load(dn)
+            # Load Tier-1 reference model as primary LSTM (atmospheric correction only)
             for lstm_variant in ("lstm", "lstm_attn"):
-                ckpt_path = os.path.join(base_dir, f"{lstm_variant}_ratio.pt")
+                # Prioritize tier1_ref model for LSTM base variant
+                if lstm_variant == "lstm":
+                    ckpt_path = os.path.join(base_dir, "lstm_tier1_ref.pt")
+                else:
+                    ckpt_path = os.path.join(base_dir, f"{lstm_variant}_ratio.pt")
+                    
                 if os.path.exists(ckpt_path):
                     ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
                     model = RatioLSTM(variant="attn" if lstm_variant == "lstm_attn" else "base")
@@ -451,6 +470,75 @@ class WeatherCorrectionLayer:
             if os.path.exists(self.model_path_dni):
                 self.model_dni = joblib.load(self.model_path_dni)
             
+    def _load_separation(self):
+        """Lazy-load the ML separation model. Returns True if usable."""
+        if self._sep_loaded:
+            return self._sep_model is not None
+        self._sep_loaded = True
+        try:
+            if os.path.exists(self.separation_path):
+                blob = joblib.load(self.separation_path)
+                self._sep_model = blob['model']
+                self._sep_features = blob['features']
+        except Exception:
+            self._sep_model = None
+        return self._sep_model is not None
+
+    def _separation_features(self, df):
+        """Build the separation model's predictor frame (satellite-derived clearness +
+        geometry + persistence/variability), aligned to df's row order."""
+        d = df.copy()
+        d['_ord'] = np.arange(len(d))
+        z = pd.to_numeric(d.get('solar_zenith', 45.0), errors='coerce').fillna(45.0).values
+        cosz = np.cos(np.radians(np.clip(z, 0, 89)))
+        times = pd.DatetimeIndex(pd.to_datetime(d['timestamp']))
+        i0 = pvlib.irradiance.get_extra_radiation(times).values
+        ghi_s = pd.to_numeric(d['ghi_satellite'], errors='coerce').fillna(0.0).values
+        csg = pd.to_numeric(d.get('clear_sky_ghi', np.maximum(i0 * cosz * 0.75, 1.0)),
+                            errors='coerce').fillna(1.0).values
+        d['kt'] = np.clip(ghi_s / np.maximum(i0 * cosz, 1.0), 0, 1.3)
+        d['kc'] = np.clip(ghi_s / np.maximum(csg, 1.0), 0, 1.3)
+        d['zenith'] = z
+        d['elevation'] = pd.to_numeric(d.get('solar_elevation', 90.0 - z), errors='coerce').fillna(45.0).values
+        d['airmass'] = pd.to_numeric(d.get('airmass', 1.5), errors='coerce').fillna(1.5).values
+        d['hour'] = times.hour + times.minute / 60.0
+        d['rh'] = pd.to_numeric(d.get('relative_humidity', 60.0), errors='coerce').fillna(60.0).values
+        d['temp'] = pd.to_numeric(d.get('temp_air', 28.0), errors='coerce').fillna(28.0).values
+        # persistence/variability computed in time order, then restored to df order
+        d = d.sort_values('timestamp')
+        d['kt_lag1'] = d['kt'].shift(1).fillna(d['kt'])
+        d['kt_std3'] = d['kt'].rolling(3, min_periods=1).std().fillna(0.0)
+        d = d.sort_values('_ord')
+        return d[self._sep_features], cosz, i0
+
+    def _apply_separation(self, df):
+        """ML-A: overwrite dni_corrected and set dhi_corrected with a physically
+        consistent split of ghi_corrected (falls back to DIRINT, then leaves raw)."""
+        if not self.use_ml_separation or 'ghi_corrected' not in df.columns:
+            return df
+        ghi = pd.to_numeric(df['ghi_corrected'], errors='coerce').fillna(0.0).values
+        try:
+            if self._load_separation():
+                feat, cosz, i0 = self._separation_features(df)
+                k = np.clip(self._sep_model.predict(feat), 0.0, 1.0)
+                dhi = k * ghi
+                dni = np.where(cosz > 0.01, (ghi - dhi) / np.maximum(cosz, 0.01), 0.0)
+                dni = np.clip(dni, 0.0, i0)
+            else:
+                # Physical fallback: DIRINT, close DHI
+                z = pd.to_numeric(df.get('solar_zenith', 45.0), errors='coerce').fillna(45.0).values
+                cosz = np.cos(np.radians(np.clip(z, 0, 89)))
+                times = pd.DatetimeIndex(pd.to_datetime(df['timestamp']))
+                dni = np.nan_to_num(pvlib.irradiance.dirint(ghi, z, times), nan=0.0)
+                dhi = np.maximum(ghi - dni * cosz, 0.0)
+            df['dni_corrected'] = np.maximum(dni, 0.0)
+            df['dhi_corrected'] = np.maximum(dhi, 0.0)
+        except Exception:
+            # On any failure keep existing dni_corrected; mirror raw dhi so physics has a column
+            if 'dhi_corrected' not in df.columns:
+                df['dhi_corrected'] = df.get('dhi_satellite', 0.0)
+        return df
+
     def predict(self, df, max_correction_ratio=1.6):
         """
         Applies correction to new data.
@@ -461,7 +549,8 @@ class WeatherCorrectionLayer:
         Args:
             df: Input DataFrame with satellite data
             max_correction_ratio: Default 1.6 (allows +60% correction).
-                                  NASA POWER often under-reports by 30-50% in West Africa.
+                                  Model learns atmospheric correction, not sensor calibration.
+                                  Tier-1 reference model is production default.
         """
         if self.model_ghi is None or self.model_dni is None:
             self.load_models()
@@ -597,6 +686,17 @@ class WeatherCorrectionLayer:
                 delta = self._station_calibration[key]
                 df_out['ghi_corrected'] += delta
                 df_out['dni_corrected'] += delta
+
+        # Use the unbiased satellite GHI as the point estimate unless ratio correction
+        # is explicitly enabled (see __init__ note). Night hours stay zeroed.
+        if not self.use_ghi_ratio_correction:
+            is_night = (df_out['hour'] < 5) | (df_out['hour'] > 19)
+            df_out['ghi_corrected'] = np.where(
+                is_night, 0.0, np.maximum(df_out['ghi_satellite'].values, 0.0))
+
+        # ML-A: re-split the (final) GHI into a physically consistent DNI/DHI pair.
+        # Overwrites dni_corrected and adds dhi_corrected for the physics layer.
+        df_out = self._apply_separation(df_out)
 
         return df_out
 
