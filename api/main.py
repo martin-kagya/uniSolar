@@ -10,6 +10,7 @@ from core.layers.weather_model import WeatherCorrectionLayer
 from core.layers.environmental_model import EnvironmentalLayer
 from core.layers.physics_model import PhysicsLayer
 from core.layers.geometry_model import GeometryLayer
+from core.layers.uncertainty_model import UncertaintyLayer
 from data.ingest_nasa import fetch_nasa_data, process_and_store
 from datetime import datetime
 import pandas as pd
@@ -40,6 +41,7 @@ weather_layer = WeatherCorrectionLayer()
 env_layer = EnvironmentalLayer()
 physics_layer = PhysicsLayer()
 geo_layer = GeometryLayer()
+uncertainty_layer = UncertaintyLayer()
 
 # Database
 engine = init_db()
@@ -309,8 +311,12 @@ def run_simulation(req: SimulationRequest):
         # 1,000 runs to determine P50/P90 yield AND NPV risk metrics.
         # Uncertainties model real-world variance in the West African context.
         mc_iterations = 1000
+        # ML-B: calibrated resource+model uncertainty (interannual variability combined
+        # in quadrature with the validated systematic model uncertainty) replaces the
+        # old hand-set 5%. See core/layers/uncertainty_model.py / uncertainty_calib.json.
+        energy_px = uncertainty_layer.energy_percentiles(result['annual_energy_kwh'])
         # Yield uncertainties
-        irradiance_std = 0.05   # 5% inter-annual solar variation
+        irradiance_std = energy_px['breakdown']['total_cov']  # calibrated (was hard-coded 0.05)
         soiling_std = 0.12      # 12% uncertainty in Harmattan deposition rates
         hardware_std = 0.03     # 3% tolerance in manufacturer specs/wiring
         # Financial / operational uncertainties
@@ -408,7 +414,13 @@ def run_simulation(req: SimulationRequest):
                 "p90_yield": p90_yield,
                 "p50_npv": p50_npv,
                 "p90_npv": p90_npv,
-                "distribution": prob_distribution
+                "distribution": prob_distribution,
+                # ML-B calibrated analytic energy percentiles (bankable, auditable)
+                "energy_p50_kwh": energy_px["p50"],
+                "energy_p90_kwh": energy_px["p90"],
+                "energy_p99_kwh": energy_px["p99"],
+                "uncertainty_breakdown": energy_px["breakdown"],
+                "p90_calibration": (uncertainty_layer.calib or {}).get("hourly_coverage"),
             },
             "environmental_metrics": {
                 "mean_pm25": _safe_pm_mean(df_l2, 'pm25'),
