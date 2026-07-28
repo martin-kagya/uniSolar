@@ -261,7 +261,9 @@ def run_simulation(req: SimulationRequest):
                 df_l2['ghi_corrected'] *= req.irradiance_bias
             if 'dni_corrected' in df_l2.columns:
                 df_l2['dni_corrected'] *= req.irradiance_bias
-            if 'dhi_satellite' in df_l2.columns:
+            if 'dhi_corrected' in df_l2.columns:
+                df_l2['dhi_corrected'] *= req.irradiance_bias
+            elif 'dhi_satellite' in df_l2.columns:
                 df_l2['dhi_satellite'] *= req.irradiance_bias
 
         # 6. Layer 3: Physics

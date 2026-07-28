@@ -202,8 +202,8 @@ class EnvironmentalLayer:
         else:
             start_date = pd.to_datetime(system_start_date)
         
-        # Time difference in years
-        years_elapsed = (timestamps - start_date).total_seconds() / (365.25 * 24 * 3600)
+        # Time difference in years (works for both Series and DatetimeIndex inputs)
+        years_elapsed = (timestamps - start_date) / np.timedelta64(1, 's') / (365.25 * 24 * 3600)
         
         # Degradation factor (compound loss)
         degradation_factor = (1.0 - self.degradation_rate) ** years_elapsed
