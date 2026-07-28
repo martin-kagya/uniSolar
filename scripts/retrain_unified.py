@@ -816,6 +816,10 @@ def main():
                     help="Number of forward-chaining temporal splits (0=disabled)")
     ap.add_argument("--lstm-seq-len", type=int, default=4,
                     help="LSTM sequence length in timesteps")
+    ap.add_argument("--lstm-hidden", type=int, default=32,
+                    help="LSTM hidden dimension")
+    ap.add_argument("--lstm-layers", type=int, default=2,
+                    help="LSTM number of layers")
     args = ap.parse_args()
     model_list = [m.strip() for m in args.models.split(",")]
     if args.clean:
@@ -824,8 +828,10 @@ def main():
         mode = "ZINDI-only"
     else:
         mode = "Combined (DB+ZINDI)"
-    global LSTM_SEQ_LEN
+    global LSTM_SEQ_LEN, LSTM_HIDDEN, LSTM_LAYERS
     LSTM_SEQ_LEN = args.lstm_seq_len
+    LSTM_HIDDEN = args.lstm_hidden
+    LSTM_LAYERS = args.lstm_layers
 
     # Load
     print("=" * 65, "\nLOADING DATA\n", "=" * 65, sep="")

@@ -19,7 +19,8 @@
 
 ### B. Training (5-fold GroupKFold CV on 64,968 ZINDI records, 38 stations)
 > **Note**: These are historical figures from the V1 model (Jun 2026). Current production
-> uses V3 training: 38,166 daytime records, 21 stations, LSTM_BASE model (RMSE 90.98 W/m²).
+> uses V3 training: 50,218 daytime records, 21 stations (no Nigeria), LSTM_BASE model
+> (RMSE 90.98 W/m² on 21-stn CV, 88.23 W/m² on full 23-stn eval).
 | Component | RMSE (W/m²) | Duration (s) |
 |---|---|---|
 | XGBoost 5-fold | 141.49 | 62.1 |

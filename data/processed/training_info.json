@@ -1,6 +1,6 @@
 {
-  "records": 38166,
-  "groups": 19,
+  "records": 50218,
+  "groups": 21,
   "features": [
     "ghi_satellite",
     "dni_satellite",
@@ -62,7 +62,7 @@
     "solar_elevation",
     "clear_sky_ghi"
   ],
-  "raw_rmse": 117.8,
+  "raw_rmse": 110.16,
   "default_model": "rf",
   "stacking": false,
   "stacking_rmse": null,

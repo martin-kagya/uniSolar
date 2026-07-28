@@ -29,8 +29,9 @@ UniSolar is a production-grade solar resource assessment platform that corrects 
 
 **Key Metrics:**
 - **23 validated ground stations** across West Africa (Ghana, Mali, Benin, Nigeria)
-- **50,218 daytime training records** from NASA POWER satellite + ground truth
-- **RMSE improvement**: 110.2 → 91.0 W/m² (17.4% reduction) with LSTM_BASE
+- **54,518 daytime records** (all 23 stations) / **50,218** (21 stations, no Nigeria — training set)
+- **RMSE improvement (23-stn eval)**: 112.31 → 88.23 W/m² (21.4%) with LSTM_BASE
+- **RMSE improvement (21-stn CV)**: 110.16 → 90.98 W/m² (17.4%) — used for model selection
 - **Production model**: LSTM_BASE (bidirectional, 32 hidden, 2 layers) + RF fallback
 - **Architecture**: 6-layer pipeline with real-time NASA POWER data integration
 
@@ -204,20 +205,21 @@ Training data was built in three stages:
 | Version | Stations | Daytime Records | Description |
 |---------|----------|-----------------|-------------|
 | V1 (Jun 30) | ~40+ DB + 21 ZINDI | ~70K | Mixed DB+ZINDI, inflated scores |
-| V2 (Jul 27) | 23 validated | 42,138 | Clean data, honest evaluation |
-| **V3 (Jul 27)** | **21 (no Nigeria)** | **38,166** | **Current production** |
+| V2 (Jul 27) | 23 validated | 54,518 | Clean data, honest evaluation |
+| **V3 (Jul 27)** | **21 (no Nigeria)** | **50,218** | **Current production training set** |
 
 ### Training Data Quality
 
-| Metric | All 23 Stations | No Nigeria (21) |
-|--------|-----------------|-----------------|
+| Metric | All 23 Stations (eval) | No Nigeria (21, training) |
+|--------|------------------------|---------------------------|
 | Records (daytime) | 54,518 | 50,218 |
 | Raw NASA RMSE | 112.31 W/m² | 110.16 W/m² |
 | Raw NASA MAE | 78.76 W/m² | 77.02 W/m² |
 | Raw NASA R² | 0.841 | 0.850 |
-| Mean GHI ratio (ground/sat) | 0.989 | 1.012 |
 
 ### 5-Fold Grouped CV — V3 (21 stations, no Nigeria)
+
+Model selection was done on the 21-station no-Nigeria subset to avoid information leakage from Nigerian stations (where satellite systematically overestimates by 25-30%).
 
 | Model | RMSE ± Std | Δ vs Raw | Improvement |
 |-------|------------|----------|-------------|
@@ -227,6 +229,16 @@ Training data was built in three stages:
 | RF | 93.48 ± 14.79 | −16.7 | 15.1% |
 | **LSTM_BASE** | **90.98 ± 5.22** | **−19.2** | **17.4%** |
 | LSTM_ATTN | 91.33 ± 5.37 | −18.8 | 17.1% |
+
+### Full Evaluation — All 23 Stations
+
+When evaluated on all 23 clean stations (including Nigeria):
+
+| Metric | Raw NASA | LSTM_BASE Corrected | Improvement |
+|--------|----------|---------------------|-------------|
+| RMSE | 112.31 W/m² | 88.23 W/m² | **+21.4%** |
+| MAE | 78.76 W/m² | 56.85 W/m² | +27.8% |
+| R² | 0.841 | 0.902 | — |
 
 ### Per-Station Error Breakdown (V3, no Nigeria)
 
@@ -258,9 +270,10 @@ Stored in `core/models/station_calibration.json`.
 | Stage | RMSE | Notes |
 |-------|------|-------|
 | Raw NASA POWER | 178.78 | Original V1 data (inflated) |
-| V1 XGBoost | 82.67 | Included easy DB stations |
+| V1 XGBoost | 82.67 | Included easy DB stations (inflated) |
 | V2 RF (23 stn) | 91.04 | Clean data, honest eval |
-| **V3 LSTM_BASE (21 stn)** | **90.98** | **Current best** |
+| V3 LSTM_BASE (21-stn CV) | 90.98 | Model selection set |
+| **V3 LSTM_BASE (23-stn eval)** | **88.23** | **Full evaluation (21.4% over raw 112.31)** |
 
 ---
 
@@ -290,8 +303,8 @@ Stored in `core/models/station_calibration.json`.
 
 **Rationale**:
 - 4 stations excluded: TA00330 (ratio too high), TA00109/TA00122/TA00354 (>20% extreme ratios)
-- 2 Nigerian stations (TA00692, TA00696) excluded in V3 — satellite systematically overestimates by 25-30%
-- Filter criteria: mean ratio 0.6–1.1, <20% extreme ratio records
+- 2 Nigerian stations (TA00692, TA00696) included in the 23-station eval set but excluded from the 21-station training set — satellite systematically overestimates by 25-30% in Nigeria
+- Filter criteria: mean ratio 0.6–1.1, <20% extreme ratio records (<0.3 or >2.5)
 
 ### 4. ECG Tariff Integration
 
@@ -331,9 +344,10 @@ Stored in `core/models/station_calibration.json`.
 |---------|---------|----------|--------|
 | ZINDI Challenge | 34,568 | 21 | 2017-2019 |
 | Ghana Tier-1 (Navrongo + Sunyani) | 15,650 | 2 | 2017-2022 |
-| **Combined (clean)** | **50,218** | **21** | **2017-2022** |
+| **Combined (clean, daytime)** | **54,518** | **23** | **2017-2022** |
+| No-Nigeria subset (training) | 50,218 | 21 | 2017-2022 |
 
-**Excluded Stations**: TA00338, TA00295, TA00064, TA00219 (faulty sensors), TA00330 (ratio too high), TA00109/TA00122/TA00354 (>20% extreme ratios), TA00692/TA00696 (Nigeria — systematic overestimation)
+**Excluded from training**: TA00338, TA00295, TA00064, TA00219 (faulty sensors), TA00330 (ratio too high), TA00109/TA00122/TA00354 (>20% extreme ratios). **Excluded from 21-station training set** (kept in 23-station eval): TA00692, TA00696 (Nigeria — satellite systematically overestimates by 25-30%).
 
 ---
 
