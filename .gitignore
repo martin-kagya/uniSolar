@@ -42,3 +42,6 @@ reports/presentation_visuals/
 *.jpg
 *.png
 images/
+# README figures (committed, exception to *.png rule above)
+!docs/figures/
+!docs/figures/*.png
