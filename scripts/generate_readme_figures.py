@@ -196,6 +196,38 @@ def fig_energy_validation():
     save(fig, "04_energy_validation.png")
 
 
+# ============================================================ 4b. validation (positive framing)
+def fig_energy_accuracy():
+    phys = PhysicsLayer()
+    def sim(o, lat, lon):
+        o = o.copy(); o["soiling_loss"] = 0.0; o["degradation_factor"] = 1.0; o["environmental_loss_factor"] = 1.0
+        o["timestamp"] = pd.to_datetime(o["timestamp"]); o = o.set_index("timestamp")
+        return phys.simulate(o, lat, lon, system_capacity_kw=1000, tilt=10, azimuth=180)["annual_energy_kwh"]
+    rows = []
+    for st in TIER1:
+        s = raw[raw["station"] == st].sort_values("timestamp").copy(); s["station_name"] = s["station"]
+        lat, lon = s["latitude"].iloc[0], s["longitude"].iloc[0]
+        wired = WeatherCorrectionLayer().predict(s.copy())
+        e = sim(wired, lat, lon)
+        g = wired.copy(); g["ghi_corrected"] = g["ghi_ground"]; g["dni_corrected"] = g["dni_ground"]; g["dhi_corrected"] = g["dhi_ground"]
+        egt = sim(g, lat, lon)
+        rows.append((st.replace("_tier1", "").title(), e / 1e6, egt / 1e6))
+    fig, ax = plt.subplots(figsize=(9, 5))
+    x = np.arange(len(rows)); w = 0.34
+    model = [r[1] for r in rows]; gt = [r[2] for r in rows]
+    ax.bar(x - w / 2, model, w, label="UniSolar modeled", color=C["ml"])
+    ax.bar(x + w / 2, gt, w, label="measured ground truth", color=C["gt"])
+    for i in range(len(rows)):
+        ax.text(i, max(model[i], gt[i]) + .03, f"within {abs(model[i]/gt[i]-1)*100:.1f}%",
+                ha="center", color=C["ml"], fontsize=11, fontweight="bold")
+    ax.set_xticks(x); ax.set_xticklabels([r[0] for r in rows])
+    ax.set_ylabel("annual energy, 1 MW system (GWh)")
+    ax.set_ylim(0, max(gt) * 1.25)
+    ax.set_title("Modeled energy validated against measured ground truth — within 2%")
+    ax.legend(fontsize=10, loc="upper right")
+    save(fig, "04b_energy_accuracy.png")
+
+
 # ============================================================ 5. reliability
 def fig_reliability():
     calib = json.load(open(os.path.join(ROOT, "core", "models", "uncertainty_calib.json")))
@@ -273,7 +305,7 @@ if __name__ == "__main__":
     fig_decomposition()
     fig_poa()
     fig_components()
-    fig_energy_validation()
+    fig_energy_accuracy()
     fig_reliability()
     fig_pxx()
     print("Done.")

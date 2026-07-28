@@ -45,3 +45,7 @@ images/
 # README figures (committed, exception to *.png rule above)
 !docs/figures/
 !docs/figures/*.png
+
+# Raw external data & API caches (regenerable; not source)
+data/world_bank/
+data/processed/*_results.json
